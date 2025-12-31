@@ -1,0 +1,47 @@
+[versions]
+# Android & Gradle
+androidGradlePlugin = "8.11.0"
+material = "1.12.0"
+annotation = "1.9.1"
+# Kotlin
+kotlin = "2.2.0"
+# Jetpack Compose
+activityCompose = "1.4.0"
+navigationCompose = "2.7.7"
+composeMaterial3 = "1.3.2"
+composeMaterial3Adaptive = "1.4.0-alpha16"
+composeMaterialIcons = "1.7.8"
+composeUiTooling = "1.4.0"
+composeUiToolingPreview = "1.8.3"
+# Other Libraries
+zephyr = "3.1.0"
+
+[libraries]
+# AndroidX & Material
+google-material = { module = "com.google.android.material:material", version.ref = "material" }
+androidx-annotation = { module = "androidx.annotation:annotation", version.ref = "annotation" }
+androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activityCompose" }
+# Navigation
+androidx-navigation-compose = { module = "androidx.navigation:navigation-compose", version.ref = "navigationCompose" }
+# Compose
+androidx-compose-material3 = { module = "androidx.compose.material3:material3", version.ref = "composeMaterial3" }
+androidx-compose-material3-window = { module = "androidx.compose.material3:material3-window-size-class", version.ref = "composeMaterial3" }
+androidx-compose-material3-adaptive = { module = "androidx.compose.material3:material3-adaptive-navigation-suite", version.ref = "composeMaterial3Adaptive" }
+androidx-compose-material-icons-core = { module = "androidx.compose.material:material-icons-core", version.ref = "composeMaterialIcons" }
+androidx-compose-material-icons-extended = { module = "androidx.compose.material:material-icons-extended", version.ref = "composeMaterialIcons" }
+androidx-compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling", version.ref = "composeUiTooling" }
+androidx-compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview-android", version.ref = "composeUiToolingPreview" }
+# Zephyr
+zephyr-tools = { module = "com.github.niki914.Zephyr:tools", version.ref = "zephyr" }
+zephyr-provider = { module = "com.github.niki914.Zephyr:provider", version.ref = "zephyr" }
+zephyr-log = { module = "com.github.niki914.Zephyr:log", version.ref = "zephyr" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "androidGradlePlugin" }
+android-library = { id = "com.android.library", version.ref = "androidGradlePlugin" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+android-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+
+[bundles]
+zephyr = ["zephyr-tools", "zephyr-provider", "zephyr-log"]
+compose-material-icons = ["androidx-compose-material-icons-core", "androidx-compose-material-icons-extended"]
