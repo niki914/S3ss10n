@@ -17,8 +17,6 @@ Demo.apk：[Demo.apk](https://github.com/niki914/s3ss10n/releases/latest)
 
 ### Gradle
 
-如果你通过 JitPack 分发：
-
 ```kotlin
 dependencyResolutionManagement {
     repositories {
@@ -29,15 +27,11 @@ dependencyResolutionManagement {
 }
 ```
 
-然后添加依赖（将坐标替换为你发布的 group/artifact/version）：
-
 ```kotlin
 dependencies {
-    implementation("com.github.niki914:s3ss10n:<version>")
+    implementation("com.github.niki914:s3ss10n:1.0")
 }
 ```
-
-如果你发布到 MavenCentral / 私服，请按对应仓库的方式添加 repository 与坐标。
 
 ## 快速开始
 
@@ -230,7 +224,3 @@ override suspend fun onToolCall(toolCall: ToolCall): Message.Tool {
 ### 2) tool_calls 为什么需要等待？
 
 OpenAI 风格的流式 `tool_calls` 可能被拆分成多段传输。库内部会将分片合并为完整 JSON 参数（见 [ToolCallHandler.kt](./s3ss10n/src/main/java/com/niki914/s3ss10n/util/ToolCallHandler.kt)），并在本轮流式结束后汇总 tool 执行结果再继续下一轮补全（见 [ChatSession.kt](./s3ss10n/src/main/java/com/niki914/s3ss10n/ChatSession.kt)）。
-
-## License
-
-TBD

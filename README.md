@@ -35,7 +35,7 @@ dependencyResolutionManagement {
 
 ```kotlin
 dependencies {
-    implementation("com.github.niki914:s3ss10n:<version>")
+    implementation("com.github.niki914:s3ss10n:1.0")
 }
 ```
 
@@ -100,8 +100,4 @@ If you use the built-in tool runner, see the demo app or the following classes:
 
 - [ToolManager.kt](./s3ss10n/src/main/java/com/niki914/s3ss10n/toolbase/ToolManager.kt)
 - [ToolModel.kt](./s3ss10n/src/main/java/com/niki914/s3ss10n/toolbase/ToolModel.kt)
-- [ToolCallJsonTransformLayer.kt](./s3ss10n/src/main/java/com/niki914/s3ss10n/toolbase/ToolCallJsonTransformLayer.kt)
-
-## License
-
-TBD
+- [ToolCallJsonTransformLayer.kt](./s3ss10n/src/main/java/com/niki914/s3ss10n/toolbase/ToolCallJsonTransformLayer.kt)s
