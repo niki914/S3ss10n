@@ -25,32 +25,91 @@
 <source-index module=":s3ss10n">
 
   <layer name="public-api" path="s3ss10n/src/main/java/com/niki914/s3ss10n/">
+    <note>Phase 1 完成。新公开 API 就位，内部通过 SessionImpl 包装旧 ChatSession。</note>
+
+    <file name="Session.kt">
+      <role>主入口 interface。开发者唯一接触的会话对象。</role>
+      <contract>
+        suspend fun send(text: String, onEvent: (SessionEvent) -> Unit = {})
+        suspend fun getHistory(): List&lt;ChatPair&gt;
+        suspend fun resetConversation()
+        suspend fun close()
+        companion.open(block: SessionConfig.() -> Unit): Session
+      </contract>
+      <note>update{} 暂未暴露（待 Phase 3）。</note>
+    </file>
+
+    <file name="SessionImpl.kt">
+      <role>Session 的内部实现。持有 ChatSession 并实现 ChatSession.Callback，将内部 ChatEvent 映射为 SessionEvent。</role>
+      <note>Phase 2 目标：消除此适配层，将逻辑直接内联到 ChatSession。</note>
+    </file>
+
+    <file name="SessionConfig.kt">
+      <role>公开配置类（非 data class，待后续改为 data class + 扩展函数）。</role>
+      <fields>endpoint, apiKey, model, systemPrompt, temperature, connectTimeoutSeconds, readTimeoutSeconds, writeTimeoutSeconds</fields>
+      <dsls>hooks { }, localTools { }, mcp { }</dsls>
+    </file>
+
+    <file name="SessionEvent.kt">
+      <role>send() 期间的细粒度事件流。</role>
+      <sealed-types>
+        RoundStarted(input), TextDelta(delta, fullText), ToolRunning/ToolSucceeded/ToolFailed,
+        RoundCompleted(fullText), Error(stage, message, cause)
+      </sealed-types>
+      <enum>Stage: Transport, Parse, Tool, Session</enum>
+    </file>
+
+    <file name="ToolCallRequest.kt">
+      <role>hooks {} 中接收的工具调用对象。sealed interface。</role>
+      <methods>ok(contentJson), error(message, contentJson?), delegate()</methods>
+      <impls>LocalToolCallRequest (使用 ToolManager), McpToolCallRequest (占位)</impls>
+    </file>
+
+    <file name="ToolCallKind.kt">
+      <role>工具来源区分。sealed interface: Local (data object), Mcp(serverName) (data class)。</role>
+    </file>
+
+    <file name="LocalToolRegistry.kt">
+      <role>localTools {} DSL 类型。</role>
+      <types>LocalToolRegistry (interface), LocalToolConfig, LocalToolProperty, ToolValueType (enum)</types>
+      <dsl-props>string/integer/number/boolean/object_/array/rawJsonSchema</dsl-props>
+    </file>
+
+    <file name="McpTypes.kt">
+      <role>MCP 占位类型。编译通过，无真实行为。</role>
+      <types>McpRegistry (interface), McpServerConfig, McpTransport (sealed: Http)</types>
+    </file>
+
+    <!-- 以下为旧 API，仍存在于内部但不再推荐直接使用 -->
+
     <file name="ChatSession.kt">
-      <role>主入口。会话级编排器：协调历史记录、流式输出、工具调用。</role>
+      <role>旧主入口。SessionImpl 内部持有并作为 Callback 桥接。对外已由 Session 替代。</role>
+      <callback-interface>Callback: onConfigInvalid, onStarted, onUpdated, onContent, onError, onToolCall(suspend), onCompleted</callback-interface>
       <state-machine>
         Idle → sendMessage() → 清理上一轮 → 发送请求 → 流式接收 → Complete
         → 若有待处理 toolCall → 等待工具结果 → 递归调用 sendMessage(null)
         → 否则 → 回调 onCompleted()
         reset() → 取消当前 Job → 清空 HistoryKeeper → 取消 ToolCallWaiter
       </state-machine>
-      <key-types>内部持有 ChatClient, HistoryKeeper, ToolCallWaiter</key-types>
-      <callback-interface>Callback: onConfigInvalid, onStarted, onUpdated, onContent, onError, onToolCall(suspend), onCompleted</callback-interface>
     </file>
+
     <file name="ChatClient.kt">
       <role>低级客户端。负责配置校验、请求构建。将 HTTP 委托给 ChatService。</role>
     </file>
+
     <file name="ChatPair.kt">
-      <role>单轮对话数据模型（1 条用户消息 + N 条助手/工具消息）。</role>
+      <role>单轮对话数据模型（1 条用户消息 + N 条助手/工具消息）。Session.getHistory() 的返回类型。</role>
       <state-enum>RoundState: Pending → Generating → Succeeded | Failed</state-enum>
     </file>
+
     <file name="Config.kt">
-      <role>内部配置数据类，非公开 API。对外使用 ConfigBuilder DSL。</role>
+      <role>内部配置数据类（internal）。SessionConfig DSL 结果经 ConfigBuilder 映射到此类型。</role>
     </file>
   </layer>
 
   <layer name="chat-stream" path="s3ss10n/src/main/java/com/niki914/s3ss10n/chat/">
     <file name="ChatBeans.kt">
-      <role>流式管道领域事件类型。sealed AIContent、sealed ChatEvent。</role>
+      <role>内部流式管道事件。sealed AIContent、sealed ChatEvent。SessionImpl 将它们映射为 SessionEvent。</role>
     </file>
     <file name="ChatService.kt">
       <role>内部。桥接 OkHttp 调用 → SseClient + SseToChatTransformLayer。</role>
@@ -59,7 +118,7 @@
       <role>内部。SseEvent → ChatEvent 转换。通过 ToolCallHandler 累积碎片化的 tool_call delta。</role>
     </file>
     <dir name="protocol/">
-      <file name="ChatApiRequestBody.kt"><role>请求 JSON 模型</role></file>
+      <file name="ChatApiRequestBody.kt"><role>请求 JSON 模型（含 temperature）</role></file>
       <file name="ChatApiResponseFrame.kt"><role>响应 JSON 模型</role></file>
       <file name="RequestModel.kt"><role>ToolDefinition, FunctionTool, FunctionParameters, PropertyDefinition</role></file>
       <file name="ResponseModel.kt"><role>ToolCall, FunctionCall, Choice, Delta</role></file>
@@ -80,13 +139,13 @@
   </layer>
 
   <layer name="tool-calling" path="s3ss10n/src/main/java/com/niki914/s3ss10n/toolbase/">
-    <file name="ToolManager.kt"><role>ToolModel 注册表 + 执行器。生成请求配置中的工具定义。</role></file>
-    <file name="ToolModel.kt"><role>定义 LLM 可调用工具的抽象基类。子类实现 execInternal()。</role></file>
+    <file name="ToolManager.kt"><role>ToolModel 注册表 + 执行器。LocalToolCallRequest.delegate() 内部使用。</role></file>
+    <file name="ToolModel.kt"><role>定义 LLM 可调用工具的抽象基类（旧 API，内部保留）。</role></file>
     <file name="ToolCallJsonTransformLayer.kt"><role>工具调用 → JSON 解析。为工具实现提供响应构建器。</role></file>
   </layer>
 
   <layer name="util" path="s3ss10n/src/main/java/com/niki914/s3ss10n/util/">
-    <file name="ConfigBuilder.kt"><role>Config DSL 构造器。提供 socksProxy()、httpProxy() 便捷方法。</role></file>
+    <file name="ConfigBuilder.kt"><role>内部。SessionConfig → Config 的桥梁。保留 socksProxy()、httpProxy()。</role></file>
     <file name="ConfigHolder.kt"><role>基于 AtomicReference 的线程安全 Config 容器。</role></file>
     <file name="HistoryKeeper.kt"><role>线程安全 ChatPair 列表。Mutex 保护。支持向最新 Assistant 消息增量追加 text/toolCall。</role></file>
     <file name="ToolCallHandler.kt"><role>累积流式 tool_call JSON 片段，在收到完成信号时发出完整 ToolCall。</role></file>
@@ -115,35 +174,39 @@
 </source-index>
 
 <source-index module=":app">
-  <note>Demo 应用。所有库集成模式以 DemoChatViewModel（ChatSession.Callback 实现）和 DemoToastModel（ToolModel 示例）为参考即可。其余 UI 代码为 Compose 常规写法，无特殊约束。</note>
+  <note>Demo 应用。使用新 Session API（Session.open {} + SessionEvent 回调）。已删除 DemoToastModel（工具改为 localTools DSL 内联定义 + hooks {} 处理）。</note>
   <file name="DemoChatViewModel.kt" path="app/src/main/java/com/niki914/demo/">
-    <role>继承 ComposeMVIViewModel，实现 ChatSession.Callback。桥接库层 → MVI 状态。</role>
-  </file>
-  <file name="DemoToastModel.kt" path="app/src/main/java/com/niki914/demo/">
-    <role>ToolModel 示例实现，演示工具调用集成模式。</role>
+    <role>继承 ComposeMVIViewModel。通过 Session.open {} 创建会话，send() 的 onEvent 回调映射到 MVI 状态。</role>
+    <key-pattern>ChatState.pairs 通过 Session.getHistory() 轮询刷新。</key-pattern>
   </file>
 </source-index>
 
 <data-flow-trace>
-  <trace id="send-message">
-    ChatSession.sendMessage(userMsg)
-    → cleanUpCurrWork()（取消前一个 Job）
-    → HistoryKeeper.addUserMsg()
-    → ChatClient.sendMessages(messages)
-      → isConfigValid()? 否 → flowOf(Start, Error, Complete(false))
-      → 是 → ChatService.newChat(requestBody)
-        → Request.Builder（占位 URL，由 DynamicURLInterceptor 替换为 config.baseUrl）
-        → OkHttp newCall → SseClient.execute()
-          → SSE 逐行解析 → SseEvent Flow
-          → SseToChatTransformLayer.transformEvent()
-            → 对碎片化 tool_call delta 累积到 ToolCallHandler
-            → 发出 ChatEvent.AI / ToolCallIntent / Error / Complete
-    ← ChatSession sendMessage() 协程收集 Flow&lt;ChatEvent&gt;
-      → ChatEvent.AI → HistoryKeeper.appendTextToLastAIMsg() → Callback.onContent()
-      → ChatEvent.ToolCallIntent → HistoryKeeper.appendToolCallToLastAIMsg() → ToolCallWaiter.enqueue()
-      → ChatEvent.Complete → toolCallWaiter 非空？
-        → 是 → responseToolCalls() → HistoryKeeper.addToolResults() → 递归 sendMessage(null)
-        → 否 → Callback.onCompleted()
+  <trace id="send-message-phase1">
+    Session.send(text, onEvent)
+    → SessionImpl: 记录 currentInput, applyConfig()
+    → ChatSession.sendMessage(text)
+      → cleanUpCurrWork()
+      → HistoryKeeper.addUserMsg()
+      → ChatClient.sendMessages(messages)
+        → ChatService.newChat(requestBody)
+          → SseClient.execute() → SseEvent Flow
+          → SseToChatTransformLayer → ChatEvent Flow
+      ← ChatSession 收集 ChatEvent:
+        → ChatEvent.Start → SessionImpl.onStarted() → SessionEvent.RoundStarted
+        → ChatEvent.AI(Text) → SessionImpl.onContent() → SessionEvent.TextDelta
+        → ChatEvent.ToolCallIntent → SessionImpl.onToolCall()
+          → 构建 ToolCallRequest → 发射 ToolRunning
+          → 调用 hooks{} block → 返回 Message.Tool
+          → 发射 ToolSucceeded / ToolFailed
+        → ChatEvent.Complete → SessionImpl.onCompleted()
+          → 若有 tool calls → ChatSession.responseToolCalls() → 递归 sendMessage(null)
+          → 否则 → SessionEvent.RoundCompleted
+        → ChatEvent.Error → SessionImpl.onError() → SessionEvent.Error
+  </trace>
+  <trace id="known-issue">
+    <issue>TextDelta.fullText 在 tool-call 触发的递归 send 中会清空。textAccumulator 只累积单次 sendMessage() 的文本，跨递归轮不累计。</issue>
+    <issue>SessionImpl 是薄适配层，ChatSession.Callback 仍在中间，Phase 2 应消除。</issue>
   </trace>
 </data-flow-trace>
 
