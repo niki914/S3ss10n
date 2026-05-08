@@ -4,30 +4,22 @@ import androidx.compose.runtime.Composable
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import com.niki914.composebase.ComposeMVIViewModel
-import com.niki914.s3ss10n.ChatPair
-import com.niki914.s3ss10n.ChatSession
-import com.niki914.s3ss10n.chat.AIContent
-import com.niki914.s3ss10n.chat.protocol.ToolCall
-import com.niki914.s3ss10n.chat.protocol.beans.Message
-import com.niki914.s3ss10n.toolbase.ToolManager
-import com.niki914.s3ss10n.util.ConfigBuilder
-import com.zephyr.provider.Zephyr
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
+import com.niki914.s3ss10n.Session
+import com.niki914.s3ss10n.SessionConfig
+import com.niki914.s3ss10n.SessionEvent
+import com.niki914.s3ss10n.ToolCallKind
 import kotlinx.coroutines.launch
 
 data class ChatState(
-    val pairs: List<ChatPair>,
     val isGenerating: Boolean,
-    val config: ConfigBuilder
+    val config: SessionConfig
 )
 
 sealed interface ChatIntent {
     data class Send(val msg: String) : ChatIntent
     data class SetConfig(
-        val block: (ConfigBuilder.() -> Unit)
+        val block: (SessionConfig.() -> Unit)
     ) : ChatIntent
-
     data object NewRoom : ChatIntent
 }
 
@@ -38,16 +30,9 @@ sealed interface ChatEffect {
 }
 
 class ChatViewModel
-    : ComposeMVIViewModel<ChatIntent, ChatState, ChatEffect>(), ChatSession.Callback {
+    : ComposeMVIViewModel<ChatIntent, ChatState, ChatEffect>() {
 
-    private val toolManager = ToolManager().apply {
-        registerTool<DemoToastModel>()
-//       or: registerTool(DemoToastModel())
-    }
-    private val chatSession = ChatSession().apply {
-        callback = this@ChatViewModel
-    }
-    private var updateJob: Job? = null
+    private var session: Session? = null
 
     val uiState: ChatState
         @Composable
@@ -55,102 +40,92 @@ class ChatViewModel
 
     override fun initUiState(): ChatState {
         return ChatState(
-            pairs = emptyList(),
             isGenerating = false,
-            config = ConfigBuilder()
+            config = SessionConfig()
         )
-    }
-
-    private fun newRoom() = viewModelScope.launch {
-        chatSession.reset()
-        updateJob?.cancel()
-        sendEffect(ChatEffect.NewRoomCreated)
-        updateState {
-            copy(
-                pairs = emptyList(),
-                isGenerating = false
-            )
-        }
-    }
-
-    private fun updatePairs() {
-        updateJob?.cancel()
-        updateJob = viewModelScope.launch(Dispatchers.Default) {
-            val history = chatSession.getHistory()
-            val last = history.lastOrNull() ?: return@launch
-
-            // 性能优化，但是从触发时机来看应该不会的，又不是轮询
-            if (last == currentState.pairs.lastOrNull())
-                return@launch
-
-            updateState {
-                copy(
-                    pairs = history,
-                    isGenerating = (last.state == ChatPair.RoundState.Generating || last.state == ChatPair.RoundState.Pending)
-                )
-            }
-        }
     }
 
     override suspend fun handleIntent(intent: ChatIntent) {
         when (intent) {
-            is ChatIntent.Send -> {
-                chatSession.sendMessage(intent.msg)
-            }
-
             is ChatIntent.SetConfig -> {
-                chatSession.updateConfig {
-                    intent.block(this)
-                    tools = (tools ?: emptyList()) + toolManager.descriptions
+                intent.block(currentState.config)
+                session = Session.open {
+                    endpoint = currentState.config.endpoint
+                    apiKey = currentState.config.apiKey
+                    model = currentState.config.model
+                    systemPrompt = currentState.config.systemPrompt
+                    temperature = currentState.config.temperature
+
+                    hooks {
+                        when (kind) {
+                            ToolCallKind.Local -> {
+                                if (name == "send_toast") {
+                                    ok("""{"shown":true}""")
+                                } else {
+                                    error("Unknown tool: $name")
+                                }
+                            }
+                            is ToolCallKind.Mcp -> {
+                                error("MCP not supported yet")
+                            }
+                        }
+                    }
+
+                    localTools {
+                        add("send_toast") {
+                            description = "Send a Toast notification to the user's device."
+                            string("message") {
+                                description = "The message you'd like to tell the user."
+                                required = true
+                            }
+                        }
+                    }
                 }
-                chatSession.preConnect()
             }
 
-            is ChatIntent.NewRoom -> newRoom()
+            is ChatIntent.Send -> {
+                val s = session ?: run {
+                    sendEffect(ChatEffect.ConfigUnset)
+                    return
+                }
+                updateState { copy(isGenerating = true) }
+                s.send(intent.msg) { event ->
+                    when (event) {
+                        is SessionEvent.RoundStarted -> {
+                            updateState { copy(isGenerating = true) }
+                        }
+                        is SessionEvent.TextDelta -> {
+                            // UI updates via event stream
+                        }
+                        is SessionEvent.ToolRunning -> {
+                            println("Tool running: ${event.toolName}")
+                        }
+                        is SessionEvent.ToolSucceeded -> {
+                            println("Tool succeeded: ${event.toolName}")
+                        }
+                        is SessionEvent.ToolFailed -> {
+                            println("Tool failed: ${event.toolName} - ${event.message}")
+                        }
+                        is SessionEvent.RoundCompleted -> {
+                            updateState { copy(isGenerating = false) }
+                        }
+                        is SessionEvent.Error -> {
+                            updateState { copy(isGenerating = false) }
+                            sendEffect(ChatEffect.ErrorOccurred(event.message))
+                        }
+                    }
+                }
+            }
+
+            is ChatIntent.NewRoom -> {
+                viewModelScope.launch {
+                    session?.resetConversation()
+                    sendEffect(ChatEffect.NewRoomCreated)
+                    updateState {
+                        copy(isGenerating = false)
+                    }
+                }
+            }
         }
-    }
-
-    // --- --- --- ---
-
-    override fun onConfigInvalid() {
-        sendEffect(ChatEffect.ConfigUnset)
-    }
-
-    override fun onStarted() {
-        updatePairs()
-    }
-
-    override fun onUpdated() {
-        updatePairs()
-    }
-
-    override fun onContent(aiContent: AIContent) {
-        updatePairs()
-    }
-
-    override fun onError(message: String, cause: Throwable?) {
-        updatePairs()
-        sendEffect(ChatEffect.ErrorOccurred(message))
-    }
-
-    override suspend fun onToolCall(toolCall: ToolCall): Message.Tool {
-        updatePairs()
-
-        val result = toolManager.exec(
-            toolCall = toolCall,
-            appParams = mapOf(
-                "application" to Zephyr.application // TODO
-            )
-        )
-
-        return Message.Tool(
-            toolCallId = toolCall.id!!,
-            name = toolCall.function!!.name!!,
-            content = result
-        )
-    }
-
-    override fun onCompleted(isSuccess: Boolean, cause: Throwable?) {
-        updatePairs()
     }
 }
