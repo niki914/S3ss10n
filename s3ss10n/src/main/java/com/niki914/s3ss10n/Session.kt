@@ -1,0 +1,18 @@
+package com.niki914.s3ss10n
+
+interface Session {
+    suspend fun send(
+        text: String,
+        onEvent: (SessionEvent) -> Unit = {}
+    )
+
+    suspend fun resetConversation()
+
+    suspend fun close()
+
+    companion object {
+        fun open(block: SessionConfig.() -> Unit): Session {
+            return SessionImpl(SessionConfig().apply(block))
+        }
+    }
+}
