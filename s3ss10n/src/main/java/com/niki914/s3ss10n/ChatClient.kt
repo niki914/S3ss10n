@@ -99,7 +99,8 @@ class ChatClient(
             requestBody = ChatApiRequestBody(
                 model = config.modelName,
                 messages = messages.filterNotNull(),
-                tools = config.tools
+                tools = config.tools,
+                temperature = config.temperature
             )
         )
     }

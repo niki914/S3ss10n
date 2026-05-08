@@ -14,6 +14,7 @@ internal data class Config(
     val connectTimeout: Long,
     val writeTimeout: Long,
     val callTimeout: Long,
+    val temperature: Float? = null,
     val proxy: Proxy?,
     val interceptors: List<Interceptor>
 )

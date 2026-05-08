@@ -21,6 +21,7 @@ class ConfigBuilder {
     var connectTimeout: Long = 30L
     var writeTimeout: Long = 30L
     var callTimeout: Long = 30L
+    var temperature: Float? = null
 
     var proxy: Proxy? = null
 
@@ -46,6 +47,7 @@ class ConfigBuilder {
                 connectTimeout = config.connectTimeout
                 writeTimeout = config.writeTimeout
                 callTimeout = config.callTimeout
+                temperature = config.temperature
                 proxy = config.proxy
                 interceptors.addAll(config.interceptors.toList())
             }
@@ -71,6 +73,7 @@ class ConfigBuilder {
             connectTimeout = connectTimeout,
             writeTimeout = writeTimeout,
             callTimeout = callTimeout,
+            temperature = temperature,
             proxy = proxy,
             interceptors = interceptors.toList()
         )
