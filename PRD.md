@@ -4,6 +4,9 @@
 > 只描述开发者会接触到的 API、数据类型、事件与 DSL。
 > 不涉及任何底层实现、协议细节、线程模型或内部模块拆分。
 
+TODO: session.send<SessionProtocols.OpenAI>("") {}
+TODO: speed test
+
 ## 设计目标
 
 - 面向 Android 开发者，优先保证调用简单、可读、可维护
