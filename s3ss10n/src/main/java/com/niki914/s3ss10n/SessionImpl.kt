@@ -37,6 +37,8 @@ internal class SessionImpl(
         chatSession.sendMessage(text)
     }
 
+    override suspend fun getHistory(): List<ChatPair> = chatSession.getHistory()
+
     override suspend fun resetConversation() {
         chatSession.reset()
     }

@@ -65,10 +65,10 @@ fun DemoChatScreen(vm: ChatViewModel) {
     var showConfig by rememberSaveable { mutableStateOf(false) }
     var isConfigured by rememberSaveable { mutableStateOf(false) }
 
-    var baseUrl by rememberSaveable { mutableStateOf("") }
-    var apiKey by rememberSaveable { mutableStateOf("") }
-    var modelName by rememberSaveable { mutableStateOf("") }
-    var prompt by rememberSaveable { mutableStateOf("") }
+    var endpoint by rememberSaveable { mutableStateOf("https://api.deepseek.com/v1/chat/completions") }
+    var apiKey by rememberSaveable { mutableStateOf("sk-1307bc01b96c49c0909c7bd0a4dacf6d") }
+    var model by rememberSaveable { mutableStateOf("deepseek-v4-flash") }
+    var systemPrompt by rememberSaveable { mutableStateOf("") }
 
     var input by rememberSaveable { mutableStateOf("") }
 
@@ -104,10 +104,10 @@ fun DemoChatScreen(vm: ChatViewModel) {
     val applyConfig: () -> Unit = {
         vm.sendIntent(
             ChatIntent.SetConfig {
-                this.baseUrl = baseUrl
+                this.endpoint = endpoint
                 this.apiKey = apiKey
-                this.modelName = modelName
-                this.prompt = prompt
+                this.model = model
+                this.systemPrompt = systemPrompt
             }
         )
         isConfigured = true
@@ -155,14 +155,14 @@ fun DemoChatScreen(vm: ChatViewModel) {
 
             if (showConfig) {
                 ConfigPanel(
-                    baseUrl = baseUrl,
+                    endpoint = endpoint,
                     apiKey = apiKey,
-                    modelName = modelName,
-                    prompt = prompt,
-                    onBaseUrlChange = { baseUrl = it },
+                    model = model,
+                    systemPrompt = systemPrompt,
+                    onEndpointChange = { endpoint = it },
                     onApiKeyChange = { apiKey = it },
-                    onModelNameChange = { modelName = it },
-                    onPromptChange = { prompt = it },
+                    onModelChange = { model = it },
+                    onSystemPromptChange = { systemPrompt = it },
                     onApply = applyConfig,
                     onCancel = { showConfig = false }
                 )
@@ -201,14 +201,14 @@ fun DemoChatScreen(vm: ChatViewModel) {
 
 @Composable
 private fun ConfigPanel(
-    baseUrl: String,
+    endpoint: String,
     apiKey: String,
-    modelName: String,
-    prompt: String,
-    onBaseUrlChange: (String) -> Unit,
+    model: String,
+    systemPrompt: String,
+    onEndpointChange: (String) -> Unit,
     onApiKeyChange: (String) -> Unit,
-    onModelNameChange: (String) -> Unit,
-    onPromptChange: (String) -> Unit,
+    onModelChange: (String) -> Unit,
+    onSystemPromptChange: (String) -> Unit,
     onApply: () -> Unit,
     onCancel: () -> Unit
 ) {
@@ -229,9 +229,9 @@ private fun ConfigPanel(
                 fontWeight = FontWeight.SemiBold
             )
             OutlinedTextField(
-                value = baseUrl,
-                onValueChange = onBaseUrlChange,
-                label = { Text("Base URL") },
+                value = endpoint,
+                onValueChange = onEndpointChange,
+                label = { Text("Endpoint") },
                 modifier = Modifier.fillMaxWidth()
             )
             OutlinedTextField(
@@ -241,15 +241,15 @@ private fun ConfigPanel(
                 modifier = Modifier.fillMaxWidth()
             )
             OutlinedTextField(
-                value = modelName,
-                onValueChange = onModelNameChange,
+                value = model,
+                onValueChange = onModelChange,
                 label = { Text("Model") },
                 modifier = Modifier.fillMaxWidth()
             )
             OutlinedTextField(
-                value = prompt,
-                onValueChange = onPromptChange,
-                label = { Text("Prompt") },
+                value = systemPrompt,
+                onValueChange = onSystemPromptChange,
+                label = { Text("System Prompt") },
                 modifier = Modifier.fillMaxWidth(),
                 minLines = 2
             )

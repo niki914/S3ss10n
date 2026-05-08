@@ -4,14 +4,17 @@ import androidx.compose.runtime.Composable
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import com.niki914.composebase.ComposeMVIViewModel
+import com.niki914.s3ss10n.ChatPair
 import com.niki914.s3ss10n.Session
 import com.niki914.s3ss10n.SessionConfig
 import com.niki914.s3ss10n.SessionEvent
 import com.niki914.s3ss10n.ToolCallKind
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 data class ChatState(
-    val isGenerating: Boolean,
+    val pairs: List<ChatPair> = emptyList(),
+    val isGenerating: Boolean = false,
     val config: SessionConfig
 )
 
@@ -94,23 +97,19 @@ class ChatViewModel
                         is SessionEvent.RoundStarted -> {
                             updateState { copy(isGenerating = true) }
                         }
-                        is SessionEvent.TextDelta -> {
-                            // UI updates via event stream
-                        }
-                        is SessionEvent.ToolRunning -> {
-                            println("Tool running: ${event.toolName}")
-                        }
-                        is SessionEvent.ToolSucceeded -> {
-                            println("Tool succeeded: ${event.toolName}")
-                        }
+                        is SessionEvent.TextDelta,
+                        is SessionEvent.ToolRunning,
+                        is SessionEvent.ToolSucceeded,
                         is SessionEvent.ToolFailed -> {
-                            println("Tool failed: ${event.toolName} - ${event.message}")
+                            refreshPairs(s)
                         }
                         is SessionEvent.RoundCompleted -> {
                             updateState { copy(isGenerating = false) }
+                            refreshPairs(s)
                         }
                         is SessionEvent.Error -> {
                             updateState { copy(isGenerating = false) }
+                            refreshPairs(s)
                             sendEffect(ChatEffect.ErrorOccurred(event.message))
                         }
                     }
@@ -120,11 +119,21 @@ class ChatViewModel
             is ChatIntent.NewRoom -> {
                 viewModelScope.launch {
                     session?.resetConversation()
+                    session?.let { refreshPairs(it) }
                     sendEffect(ChatEffect.NewRoomCreated)
                     updateState {
                         copy(isGenerating = false)
                     }
                 }
+            }
+        }
+    }
+
+    private fun refreshPairs(session: Session) {
+        viewModelScope.launch(Dispatchers.Default) {
+            val history = session.getHistory()
+            updateState {
+                copy(pairs = history)
             }
         }
     }
