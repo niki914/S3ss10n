@@ -1,8 +1,8 @@
-package com.niki914.s3ss10n
+package com.niki914.s3ss10n.smoketest
 
-import com.niki914.s3ss10n.chat.protocol.beans.Message
+import com.niki914.s3ss10n.SessionConfig
 
-fun main() {
+fun main6() {
     println("=== SessionConfig Smoke Test ===")
 
     // Default values
@@ -37,7 +37,7 @@ fun main() {
     assertOrPrint("tool name", defs[0].function.name == "toast")
 
     // hooks DSL
-    cfg.hooks { call ->
+    cfg.hooks {
         ok("""{"handled":true}""")
     }
     assertOrPrint("hooks set", cfg.hooksBlock != null)
@@ -53,7 +53,3 @@ fun main() {
     println("=== ALL PASSED ===")
 }
 
-fun assertOrPrint(name: String, condition: Boolean) {
-    if (condition) println("  PASS: $name")
-    else println("  FAIL: $name")
-}

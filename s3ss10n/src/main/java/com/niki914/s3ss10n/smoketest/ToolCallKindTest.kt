@@ -1,6 +1,9 @@
-package com.niki914.s3ss10n
+package com.niki914.s3ss10n.smoketest
 
-fun main() {
+import com.niki914.s3ss10n.SessionEvent
+import com.niki914.s3ss10n.ToolCallKind
+
+fun main2() {
     println("=== ToolCallKind Smoke Test ===")
 
     // Local
@@ -38,9 +41,4 @@ fun main() {
     assertOrPrint("ToolFailed with result", tf2.resultJson == """{"e":1}""")
 
     println("=== ALL PASSED ===")
-}
-
-fun assertOrPrint(name: String, condition: Boolean) {
-    if (condition) println("  PASS: $name")
-    else println("  FAIL: $name")
 }

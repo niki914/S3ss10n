@@ -1,6 +1,8 @@
-package com.niki914.s3ss10n
+package com.niki914.s3ss10n.smoketest
 
-fun main() {
+import com.niki914.s3ss10n.SessionEvent
+
+fun main1() {
     println("=== SessionEvent Smoke Test ===")
 
     // RoundStarted
@@ -42,7 +44,3 @@ fun main() {
     println("=== ALL PASSED ===")
 }
 
-fun assertOrPrint(name: String, condition: Boolean) {
-    if (condition) println("  PASS: $name")
-    else println("  FAIL: $name")
-}

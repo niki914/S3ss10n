@@ -1,14 +1,16 @@
-package com.niki914.s3ss10n
+package com.niki914.s3ss10n.smoketest
 
+import com.niki914.s3ss10n.Session
+import com.niki914.s3ss10n.SessionEvent
 import kotlinx.coroutines.runBlocking
 
-fun main() = runBlocking {
+fun main9() = runBlocking {
     println("=== FullText Cross-Round Accumulation Test ===")
     println()
 
     // Test 1: Accumulator starts empty on send()
     println("--- Test 1: Accumulator starts empty on each send() ---")
-    val session = Session.open {
+    val session = Session.Companion.open {
         endpoint = "https://api.openai.com/v1/chat/completions"
         apiKey = "sk-test"
         model = "gpt-4.1-mini"
@@ -95,9 +97,4 @@ fun main() = runBlocking {
 
     println()
     println("=== FULLTEXT ACCUMULATION TEST COMPLETE ===")
-}
-
-fun assertOrPrint(name: String, condition: Boolean) {
-    if (condition) println("  PASS: $name")
-    else println("  FAIL: $name")
 }

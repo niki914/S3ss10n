@@ -1,14 +1,17 @@
-package com.niki914.s3ss10n
+package com.niki914.s3ss10n.smoketest
 
+import com.niki914.s3ss10n.Session
+import com.niki914.s3ss10n.SessionConfig
+import com.niki914.s3ss10n.SessionEvent
 import kotlinx.coroutines.runBlocking
 
-fun main() = runBlocking {
+fun main8() = runBlocking {
     println("=== Integration Smoke Test ===")
     println()
 
     // Test 1: Session creation with all DSL features
     println("--- Test 1: Session.open with full DSL ---")
-    val session = Session.open {
+    val session = Session.Companion.open {
         endpoint = "https://api.openai.com/v1/chat/completions"
         apiKey = "sk-test-key"
         model = "gpt-4.1-mini"
@@ -111,9 +114,4 @@ fun main() = runBlocking {
 
     println()
     println("=== ALL INTEGRATION TESTS PASSED ===")
-}
-
-fun assertOrPrint(name: String, condition: Boolean) {
-    if (condition) println("  PASS: $name")
-    else println("  FAIL: $name")
 }

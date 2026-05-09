@@ -1,11 +1,15 @@
-package com.niki914.s3ss10n
+package com.niki914.s3ss10n.smoketest
 
+import com.niki914.s3ss10n.LocalToolCallRequest
+import com.niki914.s3ss10n.McpToolCallRequest
+import com.niki914.s3ss10n.ToolCallKind
+import com.niki914.s3ss10n.ToolCallRequest
 import com.niki914.s3ss10n.chat.protocol.FunctionCall
 import com.niki914.s3ss10n.chat.protocol.ToolCall
 import com.niki914.s3ss10n.chat.protocol.beans.Message
 import com.niki914.s3ss10n.toolbase.ToolManager
 
-fun main() {
+fun main3() {
     println("=== ToolCallRequest Smoke Test ===")
 
     val toolCall = ToolCall(
@@ -50,9 +54,4 @@ fun main() {
     assertOrPrint("ToolCallRequest is sealed interface", req1 is ToolCallRequest && req2 is ToolCallRequest)
 
     println("=== ALL PASSED ===")
-}
-
-fun assertOrPrint(name: String, condition: Boolean) {
-    if (condition) println("  PASS: $name")
-    else println("  FAIL: $name")
 }

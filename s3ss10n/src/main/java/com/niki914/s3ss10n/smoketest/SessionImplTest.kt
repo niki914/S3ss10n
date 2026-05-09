@@ -1,20 +1,22 @@
-package com.niki914.s3ss10n
+package com.niki914.s3ss10n.smoketest
 
+import com.niki914.s3ss10n.Session
+import com.niki914.s3ss10n.SessionEvent
 import kotlinx.coroutines.runBlocking
 
-fun main() = runBlocking {
+fun main7() = runBlocking {
     println("=== Session Smoke Test (via ChatSession) ===")
 
     // Create Session with full config
-    val session = Session.open {
+    val session = Session.Companion.open {
         endpoint = "https://api.openai.com/v1/chat/completions"
         apiKey = "sk-test"
         model = "gpt-4.1-mini"
         systemPrompt = "You are a test assistant."
         temperature = 0.5f
 
-        hooks { call ->
-            println("  hooks called: name=${call.name}, id=${call.id}")
+        hooks {
+            println("  hooks called: name=$name, id=$id")
             ok("""{"status":"ok"}""")
         }
 

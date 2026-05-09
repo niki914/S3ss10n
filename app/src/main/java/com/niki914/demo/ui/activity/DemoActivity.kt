@@ -13,6 +13,8 @@ import com.niki914.demo.ChatViewModel
 import com.niki914.demo.ui.compose.DemoChatScreen
 import com.niki914.demo.ui.compose.theme.DemoTheme
 
+import com.niki914.s3ss10n.smoketest.main as runSmokeTests
+
 class DemoActivity : AppCompatActivity() {
 
     private val vm by viewModels<ChatViewModel>()
@@ -20,6 +22,9 @@ class DemoActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        // 运行烟测
+        runSmokeTests()
 
 //        vm.sendIntent(ChatIntent.SetConfig {
 //            baseUrl = ""
