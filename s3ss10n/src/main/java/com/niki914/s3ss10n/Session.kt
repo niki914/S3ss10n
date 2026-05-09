@@ -25,12 +25,12 @@ interface Session {
         ): Session {
             SessionProtocols.ensureInitialized()
             val config = SessionConfig.Builder().apply(builder).build()
-            
+
             var protocol = ProtocolRegistry.resolve(protocolClass)
             if (config.jsonCodec != null) {
                 protocol = protocol.withCodec(config.jsonCodec!!)
             }
-            
+
             return ChatSession(initialConfig = config, protocol = protocol)
         }
 

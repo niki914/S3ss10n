@@ -49,7 +49,7 @@ class OkHttpEngine : HttpEngine {
                 }
 
                 override fun onResponse(call: Call, response: okhttp3.Response) {
-                    try {
+                    xTry("OkHttpEngine.stream.onResponse") {
                         response.use { currentResponse ->
                             if (!currentResponse.isSuccessful) {
                                 val responseBody = currentResponse.body?.string()?.trim().orEmpty()
@@ -84,9 +84,8 @@ class OkHttpEngine : HttpEngine {
                             }
                             close()
                         }
-                    } finally {
-                        activeCalls.remove(call)
                     }
+                    activeCalls.remove(call)
                 }
             })
 
@@ -124,7 +123,9 @@ class OkHttpEngine : HttpEngine {
             }
 
             override fun onResponse(call: Call, response: okhttp3.Response) {
-                try {
+                xTry("OkHttpEngine.unary", onError = { t ->
+                    if (cont.isActive) cont.resumeWithException(t)
+                }) {
                     response.use { currentResponse ->
                         val body = currentResponse.body?.string().orEmpty()
                         if (!currentResponse.isSuccessful) {
@@ -136,13 +137,8 @@ class OkHttpEngine : HttpEngine {
                             cont.resume(body)
                         }
                     }
-                } catch (t: Throwable) {
-                    if (cont.isActive) {
-                        cont.resumeWithException(t)
-                    }
-                } finally {
-                    activeCalls.remove(call)
                 }
+                activeCalls.remove(call)
             }
         })
     }

@@ -41,7 +41,7 @@ class ChatSession internal constructor(
 
     init {
         initialConfig.localToolRegistry.codec = jsonCodec
-        scheduleDiscovery(initialConfig, reason = "open")
+        scheduleDiscovery(initialConfig)
     }
 
     private class RoundContext(
@@ -54,7 +54,7 @@ class ChatSession internal constructor(
 
     override suspend fun send(text: String, onEvent: (SessionEvent) -> Unit) {
         val config = configRef.get()
-        scheduleDiscovery(config, reason = "send")
+        scheduleDiscovery(config)
         val ctx = RoundContext(
             config.toRoundSnapshot(
                 codec = jsonCodec,
@@ -81,7 +81,7 @@ class ChatSession internal constructor(
             }
             updated
         }
-        scheduleDiscovery(updatedConfig, reason = "update", refreshCached = true)
+        scheduleDiscovery(updatedConfig, refreshCached = true)
     }
 
     override suspend fun getHistory(): List<ChatTurn> {
@@ -204,19 +204,19 @@ class ChatSession internal constructor(
 
     private suspend fun responseToolCalls(ctx: RoundContext) {
         val results = toolCallWaiter.awaitAll()
-        results.forEach { (toolCall, resultJson) ->
+        results.forEach { (toolCall, msg) ->
             historyKeeper.add(
                 protocol.encodeToolResult(
                     callId = toolCall.callId,
                     toolName = toolCall.toolName,
-                    resultJson = resultJson
+                    resultJson = msg.contentJson
                 )
             )
         }
         doRound(ctx, null)
     }
 
-    private suspend fun handleToolCall(toolCall: ToolCallSpec, ctx: RoundContext): String {
+    private suspend fun handleToolCall(toolCall: ToolCallSpec, ctx: RoundContext): Message.Tool {
         if (ctx.configSnapshot.tools.find(toolCall.toolName) == null) {
             val resultJson = """{"error":"Unknown tool '${toolCall.toolName}'"}"""
             ctx.onEvent(
@@ -234,7 +234,11 @@ class ChatSession internal constructor(
                     message = "Unknown tool '${toolCall.toolName}'"
                 )
             )
-            return resultJson
+            return Message.Tool(
+                callId = toolCall.callId,
+                toolName = toolCall.toolName,
+                contentJson = resultJson
+            )
         }
         val request = buildToolCallRequest(toolCall, ctx.configSnapshot)
         ctx.onEvent(
@@ -265,7 +269,7 @@ class ChatSession internal constructor(
             return request.error("No hooks configured")
         }
 
-        val resultJson = xTrySuspend("ChatSession.handleToolCall", onError = { t ->
+        val toolMsg = xTrySuspend("ChatSession.handleToolCall", onError = { t ->
             ctx.onEvent(
                 SessionEvent.ToolFailed(
                     callId = request.id,
@@ -331,12 +335,12 @@ class ChatSession internal constructor(
                         toolName = request.name,
                         kind = request.kind,
                         message = "No outcome recorded",
-                        resultJson = resultJson
+                        resultJson = toolMsg.contentJson
                     )
                 )
             }
         }
-        return resultJson
+        return toolMsg
     }
 
     private fun buildToolCallRequest(toolCall: ToolCallSpec, snap: SessionSnapshot): ToolCallRequest {
@@ -379,80 +383,36 @@ class ChatSession internal constructor(
 
     private fun discoveredToolsSnapshot(config: SessionConfig): Map<String, List<McpDiscoveredTool>> {
         return config.mcpRegistry.servers.mapNotNull { (serverName, server) ->
-            if (!server.enabled) {
-                android.util.Log.d("qwerqwer", "MCP discovery cache skip server=$serverName reason=disabled")
-                return@mapNotNull null
-            }
+            if (!server.enabled) return@mapNotNull null
             val fingerprint = server.discoveryFingerprint(serverName)
             val tools = mcpDiscoveryCache.snapshot(serverName, fingerprint)
-            android.util.Log.d(
-                "qwerqwer",
-                "MCP discovery cache ${if (tools == null) "miss" else "hit"} server=$serverName " +
-                    "fingerprint=$fingerprint tools=${tools?.map { it.name }.orEmpty()}"
-            )
             tools?.let { serverName to it }
         }.toMap()
     }
 
     private fun scheduleDiscovery(
         config: SessionConfig,
-        reason: String,
         refreshCached: Boolean = false
     ) {
         config.mcpRegistry.servers.forEach { (serverName, serverConfig) ->
-            if (!serverConfig.enabled) {
-                android.util.Log.d("qwerqwer", "MCP discovery skipped server=$serverName reason=disabled")
-                return@forEach
-            }
+            if (!serverConfig.enabled) return@forEach
             val fingerprint = serverConfig.discoveryFingerprint(serverName)
-            if (!refreshCached && mcpDiscoveryCache.snapshot(serverName, fingerprint) != null) {
-                android.util.Log.d(
-                    "qwerqwer",
-                    "MCP discovery skipped server=$serverName fingerprint=$fingerprint reason=cache-hit"
-                )
-                return@forEach
-            }
-            if (!mcpDiscoveryCache.markRefreshing(serverName, fingerprint)) {
-                android.util.Log.d(
-                    "qwerqwer",
-                    "MCP discovery skipped server=$serverName fingerprint=$fingerprint reason=already-refreshing"
-                )
-                return@forEach
-            }
+            if (!refreshCached && mcpDiscoveryCache.snapshot(serverName, fingerprint) != null) return@forEach
+            if (!mcpDiscoveryCache.markRefreshing(serverName, fingerprint)) return@forEach
             val serverSnapshot = serverConfig.deepCopy()
-            android.util.Log.d(
-                "qwerqwer",
-                "MCP discovery scheduled server=$serverName fingerprint=$fingerprint reason=$reason"
-            )
             scope.launch {
-                try {
-                    val tools = mcpClient.listTools(serverSnapshot)
+                val tools = xTrySuspend("ChatSession.scheduleDiscovery") {
+                    mcpClient.listTools(serverSnapshot)
+                }
+                if (tools != null) {
                     val latestServer = configRef.get().mcpRegistry.servers[serverName]
                     if (latestServer?.enabled == true &&
                         latestServer.discoveryFingerprint(serverName) == fingerprint
                     ) {
                         mcpDiscoveryCache.put(serverName, fingerprint, tools)
-                        android.util.Log.d(
-                            "qwerqwer",
-                            "MCP discovery success server=$serverName tools=${tools.map { it.name }}"
-                        )
-                    } else {
-                        android.util.Log.d(
-                            "qwerqwer",
-                            "MCP discovery stale ignored server=$serverName fingerprint=$fingerprint"
-                        )
                     }
-                } catch (ce: CancellationException) {
-                    throw ce
-                } catch (t: Throwable) {
-                    android.util.Log.d(
-                        "qwerqwer",
-                        "MCP discovery failed server=$serverName error=${t.message}",
-                        t
-                    )
-                } finally {
-                    mcpDiscoveryCache.markFinished(serverName, fingerprint)
                 }
+                mcpDiscoveryCache.markFinished(serverName, fingerprint)
             }
         }
     }

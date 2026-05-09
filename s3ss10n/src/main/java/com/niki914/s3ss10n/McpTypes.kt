@@ -57,12 +57,10 @@ internal class McpRegistryImpl : McpRegistry {
 
     override fun add(name: String, block: McpServerConfig.() -> Unit) {
         _servers[name] = McpServerConfig().apply(block)
-        logServer("add", name, _servers.getValue(name))
     }
 
     override fun replace(name: String, block: McpServerConfig.() -> Unit) {
         _servers[name] = McpServerConfig().apply(block)
-        logServer("replace", name, _servers.getValue(name))
     }
 
     override fun remove(name: String) {
@@ -106,11 +104,4 @@ internal class McpRegistryImpl : McpRegistry {
                 discoveredDescriptors + explicit
             }
         }
-
-    private fun logServer(action: String, name: String, server: McpServerConfig) {
-        android.util.Log.d(
-            "qwerqwer",
-            "McpRegistry.$action name=$name enabled=${server.enabled} transport=${server.transport} explicitTools=${server.tools.keys}"
-        )
-    }
 }

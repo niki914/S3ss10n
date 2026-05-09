@@ -20,14 +20,14 @@ sealed interface ToolCallRequest {
     val kind: ToolCallKind
     val appParams: Map<String, Any?>
 
-    suspend fun delegate(): String
+    suspend fun delegate(): Message.Tool
 
-    fun ok(contentJson: String): String
+    fun ok(contentJson: String): Message.Tool
 
     fun error(
         message: String,
         contentJson: String = """{"success":false}"""
-    ): String
+    ): Message.Tool
 }
 
 internal class LocalToolCallRequest(
@@ -41,19 +41,27 @@ internal class LocalToolCallRequest(
 
     internal var lastOutcome: ToolCallOutcome? = null
 
-    override suspend fun delegate(): String {
+    override suspend fun delegate(): Message.Tool {
         return error("Local tool '$name' has no built-in implementation. Handle it in hooks { ... }.")
     }
 
-    override fun ok(contentJson: String): String {
+    override fun ok(contentJson: String): Message.Tool {
         lastOutcome = ToolCallOutcome.Success(contentJson)
-        return contentJson
+        return Message.Tool(
+            callId = id,
+            toolName = name,
+            contentJson = contentJson
+        )
     }
 
-    override fun error(message: String, contentJson: String): String {
+    override fun error(message: String, contentJson: String): Message.Tool {
         val resultJson = """{"error":"$message","detail":$contentJson}"""
         lastOutcome = ToolCallOutcome.Failure(message, resultJson)
-        return resultJson
+        return Message.Tool(
+            callId = id,
+            toolName = name,
+            contentJson = resultJson
+        )
     }
 }
 
@@ -71,23 +79,31 @@ internal class McpToolCallRequest(
 
     internal var lastOutcome: ToolCallOutcome? = null
 
-    override suspend fun delegate(): String {
+    override suspend fun delegate(): Message.Tool {
         val currentServer = server ?: return error("MCP server '$serverName' is not configured")
-        return try {
-            ok(mcpClient.call(currentServer, name, argumentsJson))
-        } catch (t: Throwable) {
+        return xTrySuspend("McpToolCallRequest.delegate", onError = { t ->
             error(t.message ?: "MCP call failed")
+        }) {
+            ok(mcpClient.call(currentServer, name, argumentsJson))
         }
     }
 
-    override fun ok(contentJson: String): String {
+    override fun ok(contentJson: String): Message.Tool {
         lastOutcome = ToolCallOutcome.Success(contentJson)
-        return contentJson
+        return Message.Tool(
+            callId = id,
+            toolName = name,
+            contentJson = contentJson
+        )
     }
 
-    override fun error(message: String, contentJson: String): String {
+    override fun error(message: String, contentJson: String): Message.Tool {
         val resultJson = """{"error":"$message"}"""
         lastOutcome = ToolCallOutcome.Failure(message, resultJson)
-        return resultJson
+        return Message.Tool(
+            callId = id,
+            toolName = name,
+            contentJson = resultJson
+        )
     }
 }

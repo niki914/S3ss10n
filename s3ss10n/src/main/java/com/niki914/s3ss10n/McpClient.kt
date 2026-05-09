@@ -14,10 +14,18 @@ internal class HttpMcpClient(
     private val engine: HttpEngine,
     private val codec: JsonCodec
 ) : McpClient {
+    private val lifecycleCache = McpLifecycleCache()
+
     override suspend fun call(server: McpServerConfig, toolName: String, argumentsJson: String): String {
         val transport = server.transport
         if (transport !is McpTransport.Http || transport.url.isBlank()) {
             throw IllegalArgumentException("Unsupported MCP transport")
+        }
+        val fingerprint = server.discoveryFingerprint("call")
+        xTrySuspend("McpClient.call", onError = { t ->
+            throw IllegalStateException("MCP initialize failed: ${t.message}", t)
+        }) {
+            ensureInitialized(server, fingerprint)
         }
         val body = codec.encode(
             mapOf(
@@ -30,7 +38,7 @@ internal class HttpMcpClient(
                 )
             )
         )
-        return engine.unary(
+        val rawResponse = engine.unary(
             HttpRequest(
                 method = "POST",
                 url = transport.url,
@@ -44,13 +52,64 @@ internal class HttpMcpClient(
                 isStreaming = false
             )
         )
+        return normalizeResult(rawResponse)
+    }
+
+    private fun normalizeResult(rawResponse: String): String {
+        val root = codec.decodeMap(rawResponse) ?: return """{"error":"Invalid MCP response"}"""
+        val error = root["error"]
+        if (error != null) {
+            val errorMap = error as? Map<*, *>
+            val errMsg = errorMap?.get("message") as? String ?: "MCP tool call error"
+            return codec.encode(mapOf("error" to errMsg))
+        }
+        val result = root["result"] ?: return """{"error":"Missing result"}"""
+        val resultMap = result as? Map<*, *> ?: return codec.encode(result)
+        val isError = resultMap["isError"] as? Boolean == true
+        val normalized: String? = normalizeStructuredContent(resultMap)
+            ?: normalizeContentArray(resultMap)
+        if (normalized != null) {
+            if (isError) {
+                return codec.encode(
+                    mapOf("error" to "MCP tool error", "detail" to codec.decodeMap(normalized))
+                )
+            }
+            return normalized
+        }
+        return codec.encode(resultMap)
+    }
+
+    private fun normalizeStructuredContent(result: Map<*, *>): String? {
+        val sc = result["structuredContent"] ?: return null
+        return sc as? String ?: codec.encode(sc)
+    }
+
+    private fun normalizeContentArray(result: Map<*, *>): String? {
+        val content = result["content"] as? List<*> ?: return null
+        if (content.isEmpty()) return null
+        val first = content.first()
+        if (first is Map<*, *>) {
+            val type = first["type"] as? String
+            if (type == "text") {
+                val text = first["text"] as? String ?: return null
+                val parsed = codec.decodeMap(text)
+                if (parsed != null) {
+                    return codec.encode(parsed)
+                }
+                return text
+            }
+        }
+        return codec.encode(content)
     }
 
     override suspend fun listTools(server: McpServerConfig): List<McpDiscoveredTool> {
         val transport = server.transport
         if (transport !is McpTransport.Http || transport.url.isBlank()) {
-            android.util.Log.d("qwerqwer", "MCP discovery unsupported transport transport=${server.transport}")
             throw IllegalArgumentException("Unsupported MCP transport")
+        }
+        val fingerprint = server.discoveryFingerprint("discovery")
+        xTrySuspend("McpClient.listTools") {
+            ensureInitialized(server, fingerprint)
         }
         val body = codec.encode(
             mapOf(
@@ -90,6 +149,68 @@ internal class HttpMcpClient(
                 inputSchema = schema
             )
         }
+    }
+
+    private suspend fun ensureInitialized(server: McpServerConfig, fingerprint: String) {
+        if (lifecycleCache.isInitialized(fingerprint)) return
+        val transport = server.transport as? McpTransport.Http ?: return
+        val initId = System.currentTimeMillis().toString()
+        val initBody = codec.encode(
+            mapOf(
+                "jsonrpc" to "2.0",
+                "id" to initId,
+                "method" to "initialize",
+                "params" to mapOf(
+                    "protocolVersion" to "2025-06-18",
+                    "capabilities" to emptyMap<String, Any?>(),
+                    "clientInfo" to mapOf(
+                        "name" to "s3ss10n",
+                        "version" to "1.0.0"
+                    )
+                )
+            )
+        )
+        val initResponse = engine.unary(
+            HttpRequest(
+                method = "POST",
+                url = transport.url,
+                headers = server.headers + mapOf("Content-Type" to "application/json"),
+                body = initBody.toByteArray(Charsets.UTF_8),
+                timeoutMs = HttpTimeouts(
+                    connectMs = 30_000,
+                    readMs = 60_000,
+                    writeMs = 30_000
+                ),
+                isStreaming = false
+            )
+        )
+        val initRoot = codec.decodeMap(initResponse)
+        if (initRoot == null || initRoot["error"] != null) {
+            val errMsg = (initRoot?.get("error") as? Map<*, *>)?.get("message") ?: "initialize failed"
+            throw IllegalStateException("MCP initialize error: $errMsg")
+        }
+        val notifBody = codec.encode(
+            mapOf(
+                "jsonrpc" to "2.0",
+                "method" to "notifications/initialized",
+                "params" to emptyMap<String, Any?>()
+            )
+        )
+        engine.unary(
+            HttpRequest(
+                method = "POST",
+                url = transport.url,
+                headers = server.headers + mapOf("Content-Type" to "application/json"),
+                body = notifBody.toByteArray(Charsets.UTF_8),
+                timeoutMs = HttpTimeouts(
+                    connectMs = 30_000,
+                    readMs = 60_000,
+                    writeMs = 30_000
+                ),
+                isStreaming = false
+            )
+        )
+        lifecycleCache.markInitialized(fingerprint)
     }
 
     private fun Any?.asStringMap(): Map<String, Any?>? {

@@ -25,12 +25,12 @@ open class SessionConfig {
      */
     var httpEngine: com.niki914.s3ss10n.net.HttpEngine? = null
 
-    internal var hooksBlock: (suspend ToolCallRequest.() -> String)? = null
+    internal var hooksBlock: (suspend ToolCallRequest.() -> Message.Tool)? = null
     internal val localToolRegistry = LocalToolRegistryImpl()
     internal val mcpRegistry = McpRegistryImpl()
     internal val _appParams = mutableMapOf<String, Any?>()
 
-    fun hooks(block: suspend ToolCallRequest.() -> String) {
+    fun hooks(block: suspend ToolCallRequest.() -> Message.Tool) {
         hooksBlock = block
     }
 
@@ -52,13 +52,6 @@ open class SessionConfig {
     ): ToolCatalog {
         val localDescriptors = localToolRegistry.toToolDescriptors(codec)
         val mcpDescriptors = mcpRegistry.toToolDescriptors(codec, discoveredMcpTools)
-        android.util.Log.d(
-            "qwerqwer",
-            "SessionConfig.buildToolCatalog local=${localDescriptors.map { it.name }} " +
-                "explicitMcp=${mcpRegistry.explicitToolNames()} " +
-                "discoveredMcp=${discoveredMcpTools.mapValues { it.value.map { tool -> tool.name } }} " +
-                "finalMcp=${mcpDescriptors.map { it.name }}"
-        )
         return ToolCatalog(
             descriptors = localDescriptors + mcpDescriptors
         )
@@ -121,8 +114,4 @@ open class SessionConfig {
             return snapshot()
         }
     }
-}
-
-private fun McpRegistryImpl.explicitToolNames(): Map<String, List<String>> {
-    return servers.mapValues { (_, server) -> server.tools.keys.toList() }
 }

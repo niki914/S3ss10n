@@ -10,7 +10,7 @@ data class SessionSnapshot(
     val systemPrompt: String?,
     val temperature: Float,
     val timeouts: HttpTimeouts,
-    val hooksBlock: (suspend ToolCallRequest.() -> String)?,
+    val hooksBlock: (suspend ToolCallRequest.() -> Message.Tool)?,
     val appParams: Map<String, Any?>,
     val tools: ToolCatalog,
     val mcpServers: Map<String, McpServerConfig>,

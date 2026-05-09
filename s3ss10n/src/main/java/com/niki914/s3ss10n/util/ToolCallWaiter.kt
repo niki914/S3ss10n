@@ -1,19 +1,17 @@
 package com.niki914.s3ss10n.util
 
+import com.niki914.s3ss10n.Message
 import com.niki914.s3ss10n.ToolCallSpec
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 
-/**
- * handler for tool-call
- */
 internal class ToolCallWaiter<CTX>(
     private val scope: CoroutineScope,
-    private val onToolCall: suspend (ToolCallSpec, CTX) -> String
+    private val onToolCall: suspend (ToolCallSpec, CTX) -> Message.Tool
 ) {
-    private val currCalls = mutableListOf<Deferred<Pair<ToolCallSpec, String>>>()
+    private val currCalls = mutableListOf<Deferred<Pair<ToolCallSpec, Message.Tool>>>()
 
     fun isEmpty(): Boolean = currCalls.isEmpty()
 
@@ -23,7 +21,7 @@ internal class ToolCallWaiter<CTX>(
         )
     }
 
-    suspend fun awaitAll(): List<Pair<ToolCallSpec, String>> {
+    suspend fun awaitAll(): List<Pair<ToolCallSpec, Message.Tool>> {
         return currCalls.awaitAll().also {
             currCalls.clear()
         }

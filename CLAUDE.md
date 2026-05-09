@@ -14,17 +14,19 @@
 - 已覆盖: 长生命周期 `Session`、`send` 事件回调、`update` 配置更新、`resetConversation`、`close`、会话历史、OpenAI 协议适配、localTools DSL、MCP HTTP server 配置、MCP tool discovery、MCP tool call delegate。
 - 已覆盖: `SessionEvent` 的主要事件集合，包括 round、文本增量、tool running/succeeded/failed、错误阶段。
 - 已覆盖: `ToolCallKind.Local` 与 `ToolCallKind.Mcp(serverName)`，开发者可以在 hooks 中按来源分流。
-- 部分偏离: `SessionConfig` 当前是可继承配置类加 `Builder`，不是 PRD 里的纯 data class。
-- 部分偏离: `Session.open` 当前以 protocol 类型作为入口，实际用法应看 `SessionProtocols.OpenAI` 和 Demo。
-- 未覆盖: PRD 要求 hooks 返回 `Message.Tool` 的强约束；当前 hook/delegate/ok/error 走字符串 JSON 结果，项目内没有公开 `Message` 类型。
-- 未覆盖: MCP 初始化生命周期不完整；当前没有 `initialize` 请求和 `notifications/initialized` 通知，只做 `tools/list` 与 `tools/call`。
-- 未覆盖: MCP result 解码不完整；当前 `tools/call` 返回原始响应体，没有实现 `structuredContent` 优先、`content[]` 次之、`text` 内 JSON 兜底解析。
+- 已覆盖: 公开 `Message` 类型，包含 `Message.Tool`；hooks、`delegate()`、`ok()`、`error()` 均返回 `Message.Tool`，符合 PRD 强约束。
+- 已覆盖: `Session.open {}` 默认 OpenAI 入口，无协议类型参数；`Session.open<SessionProtocols.OpenAI> {}` 仍可用。
+- 已覆盖: MCP `initialize` 请求与 `notifications/initialized` 通知；`tools/list` 和 `tools/call` 前完成 lifecycle，按 server fingerprint 缓存初始化状态。
+- 已覆盖: MCP result 正规化层，优先级 `structuredContent` → `content[]` → `content[].text` 内嵌 JSON，支持 `isError`，失败时仍回填模型。
+- 部分偏离: `SessionConfig` 当前是可继承配置类加 `Builder`，不是 PRD 里的纯 data class。这是有意保留的设计——`Builder` 便于 mutable-while-configuring 模式，`snapshot()` 提供轮次不可变视图。
+- 未覆盖: PRD 示例中的 `update { block: SessionConfig.() }` 签名与当前 `update { block: SessionConfig.Builder.() }` 有细微差异，但功能等价。
 
 ## 核心导航
 
 - Session 公开入口: `s3ss10n/src/main/java/com/niki914/s3ss10n/Session.kt`。
 - Session 配置与 DSL 聚合: `s3ss10n/src/main/java/com/niki914/s3ss10n/SessionConfig.kt`。
 - Session 运行实现: `s3ss10n/src/main/java/com/niki914/s3ss10n/ChatSession.kt`。
+- 公开 Message 类型: `s3ss10n/src/main/java/com/niki914/s3ss10n/Message.kt`。
 - 单轮快照与工具目录: `s3ss10n/src/main/java/com/niki914/s3ss10n/SessionSnapshot.kt`。
 - 事件类型: `s3ss10n/src/main/java/com/niki914/s3ss10n/SessionEvent.kt`。
 - 工具调用请求与结果记录: `s3ss10n/src/main/java/com/niki914/s3ss10n/ToolCallRequest.kt`。
@@ -32,6 +34,7 @@
 - 本地工具 DSL: `s3ss10n/src/main/java/com/niki914/s3ss10n/LocalToolRegistry.kt`。
 - MCP 配置 DSL: `s3ss10n/src/main/java/com/niki914/s3ss10n/McpTypes.kt`。
 - MCP HTTP client 与 discovery: `s3ss10n/src/main/java/com/niki914/s3ss10n/McpClient.kt`、`s3ss10n/src/main/java/com/niki914/s3ss10n/McpDiscoveryCache.kt`。
+- MCP initialize lifecycle 缓存: `s3ss10n/src/main/java/com/niki914/s3ss10n/McpLifecycleCache.kt`。
 - 协议注册入口: `s3ss10n/src/main/java/com/niki914/s3ss10n/SessionProtocols.kt`。
 - OpenAI 协议实现: `s3ss10n/src/main/java/com/niki914/s3ss10n/ext/protocol/openai/OpenAIProtocol.kt`。
 - HTTP 抽象与 OkHttp 实现: `s3ss10n/src/main/java/com/niki914/s3ss10n/net/HttpEngine.kt`、`s3ss10n/src/main/java/com/niki914/s3ss10n/ext/net/OkHttpEngine.kt`。
@@ -59,9 +62,10 @@
 - 已支持 HTTP MCP endpoint 配置，入口在 `McpTypes.kt`。
 - 已支持从 MCP `tools/list` 发现工具，并把发现工具合并到当前 tool catalog。
 - 已支持 MCP `tools/call`，通过 `McpToolCallRequest.delegate` 路由到 `HttpMcpClient`。
+- 已支持 MCP initialize lifecycle：`initialize` → `notifications/initialized` → discovery/call，初始化状态按 server fingerprint 缓存在 `McpLifecycleCache.kt`。
+- 已支持 MCP result normalization in `McpClient.kt`：优先 `structuredContent`，其次 `content[]`，最后兼容 `text` 内嵌 JSON；`isError` 映射为 failure。
+- initialize 失败时 discovery 只打日志并返回空列表（不阻塞 `send()`）；call 失败时抛异常由上层转为 `Message.Tool` error。
 - 当前 discovery 是异步调度；首次 `send` 可能只能拿到缓存中已有的发现结果，显式工具配置不受 discovery 缓存影响。
-- 当前没有 MCP `initialize`、`notifications/initialized`、`protocolVersion` 协商和 capabilities 处理。
-- 当前没有标准 MCP result 正规化层；后续应在 `McpClient.kt` 附近补结果解析，避免污染 `SessionConfig`、`ToolCallRequest` 和上层 API。
 
 ## Demo 导航
 
