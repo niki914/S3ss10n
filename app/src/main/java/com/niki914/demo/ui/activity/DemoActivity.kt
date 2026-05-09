@@ -9,14 +9,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
-import androidx.lifecycle.lifecycleScope
 import com.niki914.demo.ChatViewModel
 import com.niki914.demo.ui.compose.DemoChatScreen
 import com.niki914.demo.ui.compose.theme.DemoTheme
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-
-import com.niki914.s3ss10n.smoketest.main as runSmokeTests
 
 class DemoActivity : AppCompatActivity() {
 
@@ -25,11 +20,6 @@ class DemoActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-
-        // 运行烟测
-        lifecycleScope.launch(Dispatchers.IO) {
-            runSmokeTests()
-        }
 
 //        vm.sendIntent(ChatIntent.SetConfig {
 //            endpoint = ""

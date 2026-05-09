@@ -1,6 +1,7 @@
 package com.niki914.s3ss10n.net
 
-import android.util.Log
+import com.niki914.s3ss10n.xTry
+import com.niki914.s3ss10n.xTrySuspend
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -16,8 +17,9 @@ class OkHttpEngine : HttpEngine {
     private val client = OkHttpClient.Builder().build()
 
     override fun stream(request: HttpRequest): Flow<String> = callbackFlow {
-        // TODO(T7): replace try/catch with xTry
-        try {
+        xTrySuspend("OkHttpEngine.stream", onError = { e ->
+            close(e)
+        }) {
             val callClient = client.newBuilder()
                 .connectTimeout(request.timeoutMs.connectMs, TimeUnit.MILLISECONDS)
                 .readTimeout(request.timeoutMs.readMs, TimeUnit.MILLISECONDS)
@@ -78,19 +80,13 @@ class OkHttpEngine : HttpEngine {
             awaitClose {
                 call.cancel()
             }
-        } catch (e: Exception) {
-            Log.e("qwerqwer", "OkHttpEngine stream error", e)
-            close(e)
         }
     }
 
     override fun close() {
-        // TODO(T7): replace try/catch with xTry
-        try {
+        xTry("OkHttpEngine.close") {
             client.dispatcher.executorService.shutdown()
             client.connectionPool.evictAll()
-        } catch (e: Exception) {
-            Log.e("qwerqwer", "OkHttpEngine close error", e)
         }
     }
 }

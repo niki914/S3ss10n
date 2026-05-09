@@ -1,6 +1,5 @@
 package com.niki914.s3ss10n.protocol.openai
 
-import android.util.Log
 import com.niki914.s3ss10n.ChatTurn
 import com.niki914.s3ss10n.SessionConfig
 import com.niki914.s3ss10n.SessionEvent
@@ -10,10 +9,10 @@ import com.niki914.s3ss10n.json.JsonCodec
 import com.niki914.s3ss10n.net.HttpRequest
 import com.niki914.s3ss10n.protocol.ChatProtocol
 import com.niki914.s3ss10n.protocol.ProtocolEvent
+import com.niki914.s3ss10n.xLog
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 
-// TODO(T7): replace try/catch with xTry
 class OpenAIProtocol(
     private val codec: JsonCodec = GsonJsonCodec()
 ) : ChatProtocol {
@@ -67,7 +66,7 @@ class OpenAIProtocol(
         rawSseLines.collect { line ->
             val frame = codec.decode(line, OpenAIChatResponseFrame::class.java)
             if (frame == null) {
-                Log.e("qwerqwer", "OpenAIProtocol.parseStream failed to decode frame")
+                xLog(TAG, "OpenAIProtocol.parseStream failed to decode frame")
                 emit(ProtocolEvent.Error(RuntimeException("Failed to decode SSE frame"), SessionEvent.Stage.Parse))
                 return@collect
             }
@@ -134,6 +133,8 @@ class OpenAIProtocol(
         )
     }
 }
+
+private const val TAG = "OpenAIProtocol"
 
 private class ToolCallAccumulator(
     private val codec: JsonCodec

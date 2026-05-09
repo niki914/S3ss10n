@@ -1,6 +1,5 @@
 package com.niki914.s3ss10n
 
-import android.util.Log
 import com.niki914.s3ss10n.json.GsonJsonCodec
 import com.niki914.s3ss10n.net.HttpEngine
 import com.niki914.s3ss10n.net.OkHttpEngine
@@ -20,7 +19,6 @@ import kotlinx.coroutines.sync.withLock
 class ConfigInvalidException :
     IllegalAccessException("Config is invalid. Set endpoint and model first!")
 
-// TODO(T7): replace try/catch with xTry
 class ChatSession internal constructor(
     initialConfig: SessionConfig,
     private val protocol: ChatProtocol
@@ -90,7 +88,15 @@ class ChatSession internal constructor(
     }
 
     private suspend fun doRound(ctx: RoundContext, userInput: String?) {
-        try {
+        xTrySuspend("ChatSession.doRound", onError = { t ->
+            ctx.onEvent(
+                SessionEvent.Error(
+                    stage = classifyStage(t),
+                    message = t.message ?: "Round failed",
+                    cause = t
+                )
+            )
+        }) {
             ensureConfigValid(ctx.configSnapshot)
             if (!ctx.hasStarted) {
                 ctx.hasStarted = true
@@ -160,23 +166,13 @@ class ChatSession internal constructor(
 
             if (!toolCallWaiter.isEmpty()) {
                 responseToolCalls(ctx)
-                return
+            } else {
+                ctx.onEvent(
+                    SessionEvent.RoundCompleted(
+                        fullText = ctx.textAccumulator.toString()
+                    )
+                )
             }
-
-            ctx.onEvent(
-                SessionEvent.RoundCompleted(
-                    fullText = ctx.textAccumulator.toString()
-                )
-            )
-        } catch (t: Throwable) {
-            Log.e("qwerqwer", "ChatSession.doRound failed", t)
-            ctx.onEvent(
-                SessionEvent.Error(
-                    stage = classifyStage(t),
-                    message = t.message ?: "Round failed",
-                    cause = t
-                )
-            )
         }
     }
 
@@ -224,9 +220,7 @@ class ChatSession internal constructor(
             return request.error("No hooks configured")
         }
 
-        val resultJson = try {
-            request.hooks()
-        } catch (t: Throwable) {
+        val resultJson = xTrySuspend("ChatSession.handleToolCall", onError = { t ->
             ctx.onEvent(
                 SessionEvent.ToolFailed(
                     callId = request.id,
@@ -243,7 +237,9 @@ class ChatSession internal constructor(
                     cause = t
                 )
             )
-            return request.error(t.message ?: "hooks threw exception")
+            request.error(t.message ?: "hooks threw exception")
+        }) {
+            request.hooks()
         }
 
         when (val outcome = when (request) {
