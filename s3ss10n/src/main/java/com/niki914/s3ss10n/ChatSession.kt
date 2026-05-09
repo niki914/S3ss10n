@@ -6,7 +6,6 @@ import com.niki914.s3ss10n.chat.protocol.ToolCall
 import com.niki914.s3ss10n.chat.protocol.ToolDefinition
 import com.niki914.s3ss10n.chat.protocol.beans.Message
 import com.niki914.s3ss10n.chat.protocol.beans.user
-import com.niki914.s3ss10n.toolbase.ToolManager
 import com.niki914.s3ss10n.util.HistoryKeeper
 import com.niki914.s3ss10n.util.ToolCallWaiter
 import com.zephyr.log.logE
@@ -37,8 +36,6 @@ class ChatSession(
     private var userOnEvent: ((SessionEvent) -> Unit)? = null
     private var currentInput: String = ""
     private val textAccumulator = StringBuilder()
-
-    private val toolManager = ToolManager()
 
     private val client = ChatClient {
         configRef.get()
@@ -162,6 +159,16 @@ class ChatSession(
                                 message = "Config is invalid. Set endpoint and model first."
                             )
                         )
+                    } else if (chatEvent.cause is com.google.gson.JsonSyntaxException || chatEvent.cause is java.lang.IllegalStateException) {
+                        logE(TAG, "SESSION: Parse error occurred")
+                        logE(TAG, chatEvent.cause?.stackTraceToString() ?: chatEvent.msg)
+                        userOnEvent?.invoke(
+                            SessionEvent.Error(
+                                stage = SessionEvent.Stage.Parse,
+                                message = chatEvent.msg,
+                                cause = chatEvent.cause
+                            )
+                        )
                     } else {
                         logE(TAG, "SESSION: Error occurred")
                         logE(TAG, chatEvent.cause?.stackTraceToString() ?: chatEvent.msg)
@@ -233,26 +240,66 @@ class ChatSession(
 
         val hooks = snap.hooksBlock
         return if (hooks != null) {
-            val result = request.hooks()
-            if ("error" in result.content.lowercase()) {
+            val result = try {
+                request.hooks()
+            } catch (t: Throwable) {
                 userOnEvent?.invoke(
                     SessionEvent.ToolFailed(
                         callId = request.id,
                         toolName = request.name,
                         kind = request.kind,
-                        message = result.content,
-                        resultJson = result.content
+                        message = t.message ?: "hooks threw exception",
+                        resultJson = null
                     )
                 )
-            } else {
                 userOnEvent?.invoke(
-                    SessionEvent.ToolSucceeded(
-                        callId = request.id,
-                        toolName = request.name,
-                        kind = request.kind,
-                        resultJson = result.content
+                    SessionEvent.Error(
+                        stage = SessionEvent.Stage.Tool,
+                        message = t.message ?: "hooks threw exception",
+                        cause = t
                     )
                 )
+                return request.error(t.message ?: "hooks threw exception")
+            }
+
+            val outcome = when (request) {
+                is LocalToolCallRequest -> request.lastOutcome
+                is McpToolCallRequest -> request.lastOutcome
+            }
+
+            when (outcome) {
+                is ToolCallOutcome.Success -> {
+                    userOnEvent?.invoke(
+                        SessionEvent.ToolSucceeded(
+                            callId = request.id,
+                            toolName = request.name,
+                            kind = request.kind,
+                            resultJson = outcome.resultJson
+                        )
+                    )
+                }
+                is ToolCallOutcome.Failure -> {
+                    userOnEvent?.invoke(
+                        SessionEvent.ToolFailed(
+                            callId = request.id,
+                            toolName = request.name,
+                            kind = request.kind,
+                            message = outcome.errorMessage,
+                            resultJson = outcome.resultJson
+                        )
+                    )
+                }
+                null -> {
+                    userOnEvent?.invoke(
+                        SessionEvent.ToolFailed(
+                            callId = request.id,
+                            toolName = request.name,
+                            kind = request.kind,
+                            message = "No outcome recorded",
+                            resultJson = result.content
+                        )
+                    )
+                }
             }
             result
         } else {
@@ -265,18 +312,19 @@ class ChatSession(
                     resultJson = null
                 )
             )
-            Message.Tool(
-                toolCallId = request.id,
-                name = request.name,
-                content = """{"error":"No hooks configured"}"""
+            userOnEvent?.invoke(
+                SessionEvent.Error(
+                    stage = SessionEvent.Stage.Tool,
+                    message = "no hooks configured"
+                )
             )
+            request.error("No hooks configured")
         }
     }
 
     private fun buildToolCallRequest(toolCall: ToolCall, snap: SessionConfig): ToolCallRequest {
         return LocalToolCallRequest(
             toolCall = toolCall,
-            toolManager = toolManager,
             appParams = snap.appParamsSnapshot()
         )
     }
