@@ -38,14 +38,16 @@
 - 协议注册入口: `s3ss10n/src/main/java/com/niki914/s3ss10n/SessionProtocols.kt`。
 - OpenAI 协议实现: `s3ss10n/src/main/java/com/niki914/s3ss10n/ext/protocol/openai/OpenAIProtocol.kt`。
 - HTTP 抽象与 OkHttp 实现: `s3ss10n/src/main/java/com/niki914/s3ss10n/net/HttpEngine.kt`、`s3ss10n/src/main/java/com/niki914/s3ss10n/ext/net/OkHttpEngine.kt`。
+- SSE 行解析: `s3ss10n/src/main/java/com/niki914/s3ss10n/net/SseLineParser.kt`。
 - JSON 抽象: `s3ss10n/src/main/java/com/niki914/s3ss10n/json/JsonCodec.kt`、`s3ss10n/src/main/java/com/niki914/s3ss10n/ext/json/GsonJsonCodec.kt`。
+- JSON 默认工厂: `s3ss10n/src/main/java/com/niki914/s3ss10n/json/JsonCodecFactory.kt`。
 
 ## 运行链路
 
 - 创建 Session 时，入口在 `Session.kt`，协议由 `SessionProtocols.kt` 与 `ProtocolRegistry` 解析，最终实例化 `ChatSession.kt`。
 - 每次 `send` 会从当前 config 生成 `SessionSnapshot`，该快照冻结本轮 endpoint、model、hooks、tools、MCP server 等配置。
 - `ChatSession.kt` 负责 round 串行化、取消旧工作、调协议构建请求、收集协议事件、写入 `HistoryKeeper`、推进工具调用后的下一轮请求。
-- 文本和 tool call delta 的协议解析在 `OpenAIProtocol.kt`，网络流读取在 `OkHttpEngine.kt`。
+- 文本和 tool call delta 的协议解析在 `OpenAIProtocol.kt`，网络流读取在 `OkHttpEngine.kt`，SSE 行解析在 `SseLineParser.kt`。
 - 工具调用由 `ToolCallWaiter` 收集并等待，`ChatSession.kt` 根据工具目录构造 local 或 MCP 的 `ToolCallRequest`。
 - MCP discovery 在 `ChatSession.kt` 后台调度，缓存键来自 `McpServerConfig` 的 server 指纹；实际 `tools/list` 在 `McpClient.kt`。
 

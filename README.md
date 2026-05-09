@@ -159,7 +159,7 @@ MCP tools are auto-discovered from the server. Use `call.kind` (`ToolCallKind.Lo
 ```kotlin
 interface Session {
     suspend fun send(text: String, onEvent: (SessionEvent) -> Unit = {})
-    fun update(block: SessionConfig.Builder.() -> Unit)
+    suspend fun update(block: SessionConfig.Builder.() -> Unit)
     suspend fun getHistory(): List<ChatTurn>
     suspend fun resetConversation()
     suspend fun close()

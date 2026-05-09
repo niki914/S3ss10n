@@ -152,7 +152,7 @@ MCP 工具会自动从服务端发现。可通过 `call.kind`（`ToolCallKind.Lo
 ```kotlin
 interface Session {
     suspend fun send(text: String, onEvent: (SessionEvent) -> Unit = {})
-    fun update(block: SessionConfig.Builder.() -> Unit)
+    suspend fun update(block: SessionConfig.Builder.() -> Unit)
     suspend fun getHistory(): List<ChatTurn>
     suspend fun resetConversation()
     suspend fun close()
