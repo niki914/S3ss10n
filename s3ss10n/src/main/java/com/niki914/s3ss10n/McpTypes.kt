@@ -37,4 +37,16 @@ internal class McpRegistryImpl : McpRegistry {
     override fun remove(name: String) {
         _servers.remove(name)
     }
+
+    internal fun copyFrom(other: McpRegistryImpl) {
+        _servers.clear()
+        other._servers.forEach { (k, v) ->
+            _servers[k] = v.copy(
+                headers = v.headers.toMap(),
+                transport = when(v.transport) {
+                    is McpTransport.Http -> (v.transport as McpTransport.Http).copy()
+                }
+            )
+        }
+    }
 }

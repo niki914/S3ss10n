@@ -27,10 +27,10 @@ class DemoActivity : AppCompatActivity() {
         runSmokeTests()
 
 //        vm.sendIntent(ChatIntent.SetConfig {
-//            baseUrl = ""
+//            endpoint = ""
 //            apiKey = ""
-//            modelName = "gemini-2.5-flash"
-//            prompt = "You're a helpful assistant."
+//            model = "gemini-2.5-flash"
+//            systemPrompt = "You're a helpful assistant."
 //        })
 //        vm.sendIntent(ChatIntent.Send("toast: hello world!"))
 

@@ -17,6 +17,7 @@ fun main() {
         "SessionImplTest" to { main7() },
         "IntegrationTest" to { main8() },
         "FullTextAccumulationTest" to { main9() },
+        "SessionUpdateTest" to { main10() },
     )
 
     var passed = 0

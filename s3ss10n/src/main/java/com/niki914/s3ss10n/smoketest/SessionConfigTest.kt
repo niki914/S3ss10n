@@ -50,6 +50,27 @@ fun main6() {
     }
     assertOrPrint("mcp servers", cfg.mcpRegistry.servers.size == 1)
 
+    // appParams DSL
+    cfg.appParams {
+        put("test_key", "test_value")
+    }
+    assertOrPrint("appParams put", cfg.appParamsSnapshot()["test_key"] == "test_value")
+
+    // snapshot isolation
+    val snap = cfg.snapshot()
+    cfg.endpoint = "https://new.endpoint"
+    cfg.appParams {
+        put("test_key", "new_value")
+    }
+    cfg.localTools {
+        add("new_tool") {
+            description = "New tool"
+        }
+    }
+    assertOrPrint("snapshot endpoint isolated", snap.endpoint == "https://api.openai.com/v1/chat/completions")
+    assertOrPrint("snapshot appParams isolated", snap.appParamsSnapshot()["test_key"] == "test_value")
+    assertOrPrint("snapshot localTools isolated", snap.buildToolDefinitions().size == 1)
+
     println("=== ALL PASSED ===")
 }
 

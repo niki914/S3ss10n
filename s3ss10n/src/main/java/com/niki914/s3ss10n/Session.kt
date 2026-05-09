@@ -12,6 +12,8 @@ interface Session {
 
     suspend fun close()
 
+    fun update(block: SessionConfig.() -> Unit)
+
     companion object {
         fun open(block: SessionConfig.() -> Unit): Session {
             val config = SessionConfig().apply(block)

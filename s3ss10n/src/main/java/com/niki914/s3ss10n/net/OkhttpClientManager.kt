@@ -1,8 +1,6 @@
 package com.niki914.s3ss10n.net
 
-import com.niki914.s3ss10n.Config
-import com.niki914.s3ss10n.util.ConfigBuilder
-import com.niki914.s3ss10n.util.ConfigHolder
+import com.niki914.s3ss10n.SessionConfig
 import com.niki914.s3ss10n.util.DynamicProxySelector
 import com.niki914.s3ss10n.util.gson
 import com.niki914.s3ss10n.util.interceptors.ChatApiInterceptor
@@ -19,22 +17,9 @@ import okhttp3.OkHttpClient
  * 2. 提供更新网络配置的接口
  * 3. 向业务层提供配置好的 OkHttpClient 实例
  */
-internal class OkhttpClientManager {
-
-    private val configHolder = ConfigHolder {
-//        baseUrl = ""
-    }
-
-    val config: Config
-        get() = configHolder.config
-
-    fun updateConfig(block: ConfigBuilder.() -> Unit) {
-        configHolder.update(block)
-    }
-
-    fun updateConfig(config: Config) {
-        configHolder.update(config)
-    }
+internal class OkhttpClientManager(
+    private val configSupplier: () -> SessionConfig
+) {
 
     /**
      * 向模块内部暴露配置好的 OkHttpClient 实例
@@ -42,7 +27,7 @@ internal class OkhttpClientManager {
     val okHttpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
             .addAllInterceptors()
-            .proxySelector(DynamicProxySelector(configHolder))
+            .proxySelector(DynamicProxySelector(configSupplier))
             .build()
     }
 
@@ -50,44 +35,35 @@ internal class OkhttpClientManager {
         val timeoutInterceptor =
             DynamicTimeoutInterceptor(
                 getConnectTimeout = {
-                    configHolder.config.connectTimeout.toInt()
+                    configSupplier().connectTimeoutSeconds.toInt()
                 },
                 getReadTimeout = {
-                    configHolder.config.readTimeout.toInt()
+                    configSupplier().readTimeoutSeconds.toInt()
                 },
                 getWriteTimeout = {
-                    configHolder.config.writeTimeout.toInt()
+                    configSupplier().writeTimeoutSeconds.toInt()
                 }
             )
 
         val urlInterceptor =
             DynamicURLInterceptor(
                 getUrl = {
-                    configHolder.config.baseUrl
+                    configSupplier().endpoint
                 }
             )
 
         val apiInterceptor = ChatApiInterceptor(
             getHeaders = {
                 mapOf(
-                    "Authorization" to "Bearer ${configHolder.config.apiKey}",
+                    "Authorization" to "Bearer ${configSupplier().apiKey}",
                     "Content-Type" to "application/json"
                 )
             }
         )
 
-        return apply {
-            configHolder.config.interceptors.forEach { interceptor ->
-                addInterceptor(interceptor)
-            }
-        }
+        return this
             .addInterceptor(timeoutInterceptor)
             .addInterceptor(urlInterceptor)
             .addInterceptor(apiInterceptor)
-            .addNetworkInterceptor {
-                val requestBodyJson = gson.toJson(it.request().body)
-                logE(TAG, requestBodyJson)
-                it.proceed(it.request())
-            }
     }
 }

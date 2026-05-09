@@ -63,6 +63,7 @@ fun main8() = runBlocking {
     // Test 2: send with bad config (will get Error event)
     println()
     println("--- Test 2: send() with invalid endpoint ---")
+    session.update { endpoint = "invalid" }
     val events2 = mutableListOf<SessionEvent>()
     try {
         session.send("Hello, world!") { event ->
@@ -70,6 +71,7 @@ fun main8() = runBlocking {
             val name = event.javaClass.simpleName
             println("  Event: $name")
         }
+        kotlinx.coroutines.delay(100)
     } catch (e: Exception) {
         println("  Exception: ${e.message}")
     }
@@ -78,21 +80,30 @@ fun main8() = runBlocking {
     println("  Has error event: $hasError")
     assertOrPrint("send with bad config emits Error", hasError)
 
-    // Test 3: resetConversation
+    // Test 3: update
     println()
-    println("--- Test 3: resetConversation ---")
+    println("--- Test 3: update ---")
+    session.update {
+        endpoint = "https://api.openai.com/v2/chat/completions"
+        model = "gpt-4-turbo"
+    }
+    println("  update: OK")
+
+    // Test 4: resetConversation
+    println()
+    println("--- Test 4: resetConversation ---")
     session.resetConversation()
     println("  resetConversation: OK")
 
-    // Test 4: close
+    // Test 5: close
     println()
-    println("--- Test 4: close ---")
+    println("--- Test 5: close ---")
     session.close()
     println("  close: OK")
 
-    // Test 5: SessionConfig property types
+    // Test 6: SessionConfig property types
     println()
-    println("--- Test 5: Config property validation ---")
+    println("--- Test 6: Config property validation ---")
     val cfg = SessionConfig().apply {
         endpoint = "https://test.example.com/v1/chat"
         apiKey = "sk-abc123"

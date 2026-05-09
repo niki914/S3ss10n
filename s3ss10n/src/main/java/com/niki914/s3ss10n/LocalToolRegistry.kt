@@ -109,4 +109,14 @@ internal class LocalToolRegistryImpl : LocalToolRegistry {
 
     fun toToolDefinitions(): List<ToolDefinition> =
         _tools.map { (name, config) -> config.toToolDefinition(name) }
+
+    internal fun copyFrom(other: LocalToolRegistryImpl) {
+        _tools.clear()
+        other._tools.forEach { (k, v) ->
+            val newConfig = LocalToolConfig(v.description, v.rawInputSchemaJson)
+            newConfig.properties.putAll(v.properties)
+            newConfig.requiredNames.addAll(v.requiredNames)
+            _tools[k] = newConfig
+        }
+    }
 }

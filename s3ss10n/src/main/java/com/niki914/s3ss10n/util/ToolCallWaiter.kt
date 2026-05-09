@@ -1,5 +1,6 @@
 package com.niki914.s3ss10n.util
 
+import com.niki914.s3ss10n.SessionConfig
 import com.niki914.s3ss10n.chat.protocol.ToolCall
 import com.niki914.s3ss10n.chat.protocol.beans.Message
 import kotlinx.coroutines.CoroutineScope
@@ -12,15 +13,15 @@ import kotlinx.coroutines.awaitAll
  */
 internal class ToolCallWaiter(
     private val scope: CoroutineScope,
-    private val onToolCall: suspend (ToolCall) -> Message.Tool
+    private val onToolCall: suspend (ToolCall, SessionConfig) -> Message.Tool
 ) {
     private val currCalls = mutableListOf<Deferred<Message.Tool>>()
 
     fun isEmpty(): Boolean = currCalls.isEmpty()
 
-    fun enqueue(toolCall: ToolCall) {
+    fun enqueue(toolCall: ToolCall, snap: SessionConfig) {
         currCalls.add(
-            scope.async { onToolCall(toolCall) }
+            scope.async { onToolCall(toolCall, snap) }
         )
     }
 

@@ -11,6 +11,7 @@ import com.niki914.s3ss10n.util.HistoryKeeper
 import com.niki914.s3ss10n.util.ToolCallWaiter
 import com.zephyr.log.logE
 import com.zephyr.provider.TAG
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -28,29 +29,10 @@ import kotlinx.coroutines.sync.withLock
  * Implements [Session] to provide the public API for chat interactions.
  */
 class ChatSession(
-    baseUrl: String,
-    apiKey: String,
-    modelName: String,
-    prompt: String? = null,
-    tools: List<ToolDefinition>? = null
+    config: SessionConfig
 ) : Session {
 
-    constructor() : this("", "", "", null, null)
-
-    /**
-     * Creates a ChatSession from a [SessionConfig] DSL object.
-     */
-    constructor(config: SessionConfig) : this(
-        baseUrl = config.endpoint,
-        apiKey = config.apiKey,
-        modelName = config.model,
-        prompt = config.systemPrompt,
-        tools = config.buildToolDefinitions().ifEmpty { null }
-    ) {
-        sessionConfig = config
-    }
-
-    private var sessionConfig: SessionConfig? = null
+    private val configRef = AtomicReference(config)
 
     private var userOnEvent: ((SessionEvent) -> Unit)? = null
     private var currentInput: String = ""
@@ -58,21 +40,17 @@ class ChatSession(
 
     private val toolManager = ToolManager()
 
-    private val client = ChatClient(
-        baseUrl,
-        apiKey,
-        modelName,
-        prompt,
-        tools
-    )
+    private val client = ChatClient {
+        configRef.get()
+    }
 
     private val scope = CoroutineScope(SupervisorJob())
     private var currJob: Job? = null
     private val chatMutex = Mutex()
 
     private val historyKeeper = HistoryKeeper()
-    private val toolCallWaiter = ToolCallWaiter(scope) { toolCall ->
-        handleToolCall(toolCall)
+    private val toolCallWaiter = ToolCallWaiter(scope) { toolCall, snap ->
+        handleToolCall(toolCall, snap)
     }
 
     // --- Session interface implementation ---
@@ -81,8 +59,15 @@ class ChatSession(
         userOnEvent = onEvent
         currentInput = text
         textAccumulator.clear()
-        applyConfig()
-        sendMessage(text)
+        
+        val snap = configRef.get().snapshot()
+        sendMessage(text, snap)
+    }
+
+    override fun update(block: SessionConfig.() -> Unit) {
+        configRef.updateAndGet { current ->
+            current.snapshot().apply(block)
+        }
     }
 
     override suspend fun getHistory(): List<ChatPair> = historyKeeper.getHistory()
@@ -112,37 +97,18 @@ class ChatSession(
     }
 
     /**
-     * Applies the stored SessionConfig to the underlying ChatClient.
-     */
-    private fun applyConfig() {
-        sessionConfig?.let { config ->
-            client.updateConfig {
-                baseUrl = config.endpoint
-                apiKey = config.apiKey
-                modelName = config.model
-                prompt = config.systemPrompt
-                temperature = config.temperature
-                readTimeout = config.readTimeoutSeconds
-                connectTimeout = config.connectTimeoutSeconds
-                writeTimeout = config.writeTimeoutSeconds
-                tools = config.buildToolDefinitions().ifEmpty { null }
-            }
-        }
-    }
-
-    /**
      * Sends a user message and starts a new streaming round.
      */
-    private fun sendMessage(userMsg: String) = scope.launch {
+    private fun sendMessage(userMsg: String, snap: SessionConfig) = scope.launch {
         chatMutex.withLock {
             cleanUpCurrWork()
             currJob = launch {
-                sendMessage(user(userMsg))
+                sendMessage(user(userMsg), snap)
             }
         }
     }
 
-    private suspend fun sendMessage(message: Message.User?) {
+    private suspend fun sendMessage(message: Message.User?, snap: SessionConfig) {
         message?.let {
             historyKeeper.addUserMsg(message)
         }
@@ -184,7 +150,7 @@ class ChatSession(
                 is ChatEvent.ToolCallIntent -> {
                     historyKeeper.appendToolCallToLastAIMsg(chatEvent.toolCall)
                     logE(TAG, "SESSION: Inject tool-call: ${chatEvent.toolCall.function?.name}")
-                    toolCallWaiter.enqueue(chatEvent.toolCall)
+                    toolCallWaiter.enqueue(chatEvent.toolCall, snap)
                 }
 
                 is ChatEvent.Error -> {
@@ -221,7 +187,7 @@ class ChatSession(
 
                     if (!toolCallWaiter.isEmpty() && isSuccess) {
                         logE(TAG, "SESSION: Prepare for tool responding")
-                        responseToolCalls()
+                        responseToolCalls(snap)
                     } else {
                         if (isSuccess) {
                             userOnEvent?.invoke(
@@ -244,18 +210,18 @@ class ChatSession(
         }
     }
 
-    private suspend fun responseToolCalls() {
+    private suspend fun responseToolCalls(snap: SessionConfig) {
         val results = toolCallWaiter.awaitAll()
         historyKeeper.addToolResults(results)
-        sendMessage(null)
+        sendMessage(null, snap)
     }
 
     /**
      * Handles a tool call: builds a [ToolCallRequest], dispatches through hooks,
      * and emits [SessionEvent.ToolRunning]/[SessionEvent.ToolSucceeded]/[SessionEvent.ToolFailed].
      */
-    private suspend fun handleToolCall(toolCall: ToolCall): Message.Tool {
-        val request = buildToolCallRequest(toolCall)
+    private suspend fun handleToolCall(toolCall: ToolCall, snap: SessionConfig): Message.Tool {
+        val request = buildToolCallRequest(toolCall, snap)
 
         userOnEvent?.invoke(
             SessionEvent.ToolRunning(
@@ -265,7 +231,7 @@ class ChatSession(
             )
         )
 
-        val hooks = sessionConfig?.hooksBlock
+        val hooks = snap.hooksBlock
         return if (hooks != null) {
             val result = request.hooks()
             if ("error" in result.content.lowercase()) {
@@ -307,11 +273,11 @@ class ChatSession(
         }
     }
 
-    private fun buildToolCallRequest(toolCall: ToolCall): ToolCallRequest {
+    private fun buildToolCallRequest(toolCall: ToolCall, snap: SessionConfig): ToolCallRequest {
         return LocalToolCallRequest(
             toolCall = toolCall,
             toolManager = toolManager,
-            appParams = sessionConfig?.buildAppParams() ?: emptyMap()
+            appParams = snap.appParamsSnapshot()
         )
     }
 

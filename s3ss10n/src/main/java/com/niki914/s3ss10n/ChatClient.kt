@@ -7,9 +7,14 @@ import com.niki914.s3ss10n.chat.protocol.ToolDefinition
 import com.niki914.s3ss10n.chat.protocol.beans.Message
 import com.niki914.s3ss10n.chat.protocol.beans.system
 import com.niki914.s3ss10n.net.OkhttpClientManager
-import com.niki914.s3ss10n.util.ConfigBuilder
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
+
+/**
+ * Thrown when baseUrl or modelName is not set to a valid value.
+ */
+class ConfigInvalidException() :
+    IllegalAccessException("Config is invalid. Set BaseUrl and Model first!")
 
 /**
  * A low-level client for streaming Chat Completions over SSE.
@@ -17,15 +22,9 @@ import kotlinx.coroutines.flow.flowOf
  * For a higher-level API with history and tool calling coordination, use ChatSession.
  */
 class ChatClient(
-    baseUrl: String,
-    apiKey: String,
-    modelName: String,
-    prompt: String? = null,
-    tools: List<ToolDefinition>? = null
+    private val configSupplier: () -> SessionConfig
 ) {
-    private val clientManager = OkhttpClientManager()
-    internal val config: Config
-        get() = clientManager.config
+    private val clientManager = OkhttpClientManager(configSupplier)
 
     private val service by lazy {
         ChatService(
@@ -33,19 +32,9 @@ class ChatClient(
         )
     }
 
-    init {
-        clientManager.updateConfig {
-            this.baseUrl = baseUrl
-            this.apiKey = apiKey
-            this.modelName = modelName
-            this.prompt = prompt
-            this.tools = tools
-        }
-    }
-
     private val systemMessage: Message?
         get() {
-            val prompt = clientManager.config.prompt
+            val prompt = configSupplier().systemPrompt
             return if (prompt.isNullOrBlank()) null else system(
                 prompt
             )
@@ -57,15 +46,12 @@ class ChatClient(
      * Returns whether the current configuration is valid enough to start a request.
      */
     fun isConfigValid(): Boolean {
-        return config.baseUrl.isHTTPProtocol() && config.modelName.isNotBlank() // 密钥不作限制，可能有什么 Ollama 之类的
+        val config = configSupplier()
+        return config.endpoint.isHTTPProtocol() && config.model.isNotBlank() // 密钥不作限制，可能有什么 Ollama 之类的
     }
 
     private fun String.isHTTPProtocol(): Boolean {
         return startsWith("http://") || startsWith("https://")
-    }
-
-    fun updateConfig(block: ConfigBuilder.() -> Unit) {
-        clientManager.updateConfig(block)
     }
 
     /**
@@ -95,11 +81,12 @@ class ChatClient(
             )
         }
 
+        val config = configSupplier()
         return service.newChat(
             requestBody = ChatApiRequestBody(
-                model = config.modelName,
+                model = config.model,
                 messages = messages.filterNotNull(),
-                tools = config.tools,
+                tools = config.buildToolDefinitions().ifEmpty { null },
                 temperature = config.temperature
             )
         )
