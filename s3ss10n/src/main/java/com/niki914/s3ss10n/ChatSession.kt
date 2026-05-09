@@ -2,6 +2,7 @@ package com.niki914.s3ss10n
 
 import android.util.Log
 import com.niki914.s3ss10n.chat.ChatService
+import com.niki914.s3ss10n.json.GsonJsonCodec
 import com.niki914.s3ss10n.net.OkhttpClientManager
 import com.niki914.s3ss10n.protocol.ChatProtocol
 import com.niki914.s3ss10n.protocol.ProtocolEvent
@@ -37,7 +38,7 @@ class ChatSession internal constructor(
     }
 
     init {
-        val codec = initialConfig.jsonCodec ?: com.niki914.s3ss10n.json.GsonJsonCodec()
+        val codec = initialConfig.jsonCodec ?: GsonJsonCodec()
         initialConfig.localToolRegistry.codec = codec
     }
 

@@ -1,5 +1,6 @@
 package com.niki914.s3ss10n
 
+import com.niki914.s3ss10n.json.JsonCodec
 import com.niki914.s3ss10n.protocol.openai.ToolDefinition
 
 open class SessionConfig {
@@ -16,7 +17,7 @@ open class SessionConfig {
      * 自定义 JSON 编解码器。
      * null 表示使用默认的 GsonJsonCodec()。
      */
-    var jsonCodec: com.niki914.s3ss10n.json.JsonCodec? = null
+    var jsonCodec: JsonCodec? = null
 
     internal var hooksBlock: (suspend ToolCallRequest.() -> String)? = null
     internal val localToolRegistry = LocalToolRegistryImpl()

@@ -2,6 +2,7 @@ package com.niki914.s3ss10n
 
 import com.niki914.s3ss10n.protocol.ChatProtocol
 import com.niki914.s3ss10n.protocol.ProtocolRegistry
+import kotlin.reflect.KClass
 
 interface Session {
     suspend fun send(
@@ -19,7 +20,7 @@ interface Session {
 
     companion object {
         fun <P : ChatProtocol> open(
-            protocolClass: kotlin.reflect.KClass<P>,
+            protocolClass: KClass<P>,
             builder: SessionConfig.Builder.() -> Unit
         ): Session {
             SessionProtocols.ensureInitialized()
