@@ -3,7 +3,7 @@
 [中文文档](https://github.com/niki914/s3ss10n/blob/main/README_zh_CN.md)
 
 An Android streaming Chat Completions client based on OkHttp + SSE.
-It provides session-level history management and OpenAI-compatible tool calling.
+It provides session-level history management, OpenAI-compatible tool calling, and MCP support.
 
 ## Demo
 
@@ -17,7 +17,9 @@ This repository contains a runnable demo app:
 - Streaming output for OpenAI-compatible endpoints (SSE)
 - Session wrapper with automatic history (user/assistant/tool) and round state
 - Tool calling: merges streaming tool_call fragments and resumes the next round automatically
-- Dynamic networking config: baseUrl, timeouts, proxy, extra interceptors
+- Local tool DSL with typed parameter schema
+- MCP (Model Context Protocol) HTTP server support with automatic tool discovery
+- Dynamic config: endpoint, model, timeouts, system prompt, temperature
 
 ## Installation
 
@@ -41,51 +43,27 @@ dependencies {
 
 ## Quick Start
 
-The main entry is `ChatSession`.
+The main entry is `Session`. Create one with `Session.open`, send messages with `send`, and observe events via the callback.
 
 ```kotlin
-val session = ChatSession().apply {
-    callback = object : ChatSession.Callback {
-        override fun onConfigInvalid() {
-        }
+val session = Session.open<SessionProtocols.OpenAI> {
+    endpoint = "https://api.openai.com/v1/chat/completions"
+    apiKey = "YOUR_API_KEY"
+    model = "gpt-4o-mini"
+    systemPrompt = "You are a helpful assistant."
+}
 
-        override fun onStarted() {
-        }
-
-        override fun onUpdated() {
-        }
-
-        override fun onContent(aiContent: AIContent) {
-        }
-
-        override fun onError(message: String, cause: Throwable?) {
-        }
-
-        override suspend fun onToolCall(toolCall: ToolCall): Message.Tool {
-            return Message.Tool(
-                toolCallId = toolCall.id ?: "tool_call_id",
-                name = toolCall.function?.name ?: "tool_name",
-                content = "{}"
-            )
-        }
-
-        override fun onCompleted(isSuccess: Boolean, cause: Throwable?) {
-        }
+session.send("Hello") { event ->
+    when (event) {
+        is SessionEvent.TextDelta -> print(event.delta)
+        is SessionEvent.RoundCompleted -> println("\nDone: ${event.fullText}")
+        is SessionEvent.Error -> println("Error: ${event.message}")
+        else -> Unit
     }
 }
-
-session.updateConfig {
-    baseUrl = "https://api.openai.com/v1/chat/completions"
-    apiKey = "YOUR_API_KEY"
-    modelName = "gpt-4o-mini"
-    prompt = "You are a helpful assistant."
-}
-
-session.preConnect()
-session.sendMessage("Hello")
 ```
 
-`baseUrl` is the request URL used by this library.
+`endpoint` is the request URL used by this library.
 It is not required to end with `/v1/chat/completions`.
 Use whatever endpoint your server expects, as long as it accepts an OpenAI-compatible Chat Completions payload.
 
@@ -96,8 +74,143 @@ Examples:
 
 ## Tool Calling
 
-If you use the built-in tool runner, see the demo app or the following classes:
+s3ss10n merges streaming `tool_calls` fragments automatically. Use `hooks { ... }` to intercept tool calls and return results.
 
-- [ToolManager.kt](./s3ss10n/src/main/java/com/niki914/s3ss10n/toolbase/ToolManager.kt)
-- [ToolModel.kt](./s3ss10n/src/main/java/com/niki914/s3ss10n/toolbase/ToolModel.kt)
-- [ToolCallJsonTransformLayer.kt](./s3ss10n/src/main/java/com/niki914/s3ss10n/toolbase/ToolCallJsonTransformLayer.kt)s
+### 1) Register local tools
+
+```kotlin
+val session = Session.open<SessionProtocols.OpenAI> {
+    endpoint = "https://api.openai.com/v1/chat/completions"
+    apiKey = "YOUR_API_KEY"
+    model = "gpt-4o-mini"
+
+    localTools {
+        add("getCurrentWeather") {
+            description = "Get weather for a city"
+            string("location") {
+                description = "City name, e.g. Beijing"
+                required = true
+            }
+        }
+    }
+}
+```
+
+### 2) Handle tool calls in hooks
+
+```kotlin
+val session = Session.open<SessionProtocols.OpenAI> {
+    // ... endpoint, apiKey, model ...
+
+    hooks { call ->
+        when (call.name) {
+            "getCurrentWeather" -> ok("""{"weather":"sunny","location":"Beijing"}""")
+            else -> delegate()
+        }
+    }
+
+    localTools {
+        add("getCurrentWeather") {
+            description = "Get weather for a city"
+            string("location") {
+                description = "City name"
+                required = true
+            }
+        }
+    }
+}
+```
+
+`hooks { ... }` receives a `ToolCallRequest` and must return `Message.Tool`. Use:
+- `ok(contentJson)` for success
+- `error(message)` for failure
+- `delegate()` to let the default handler take over (e.g. for MCP tools)
+
+### 3) MCP tools
+
+```kotlin
+val session = Session.open<SessionProtocols.OpenAI> {
+    endpoint = "https://api.openai.com/v1/chat/completions"
+    apiKey = "YOUR_API_KEY"
+    model = "gpt-4o-mini"
+
+    hooks { call ->
+        when (call.kind) {
+            ToolCallKind.Local -> {
+                // handle local tools here
+                delegate()
+            }
+            is ToolCallKind.Mcp -> delegate()
+        }
+    }
+
+    mcp {
+        add("aslocate") {
+            http { url = "http://127.0.0.1:51338/mcp" }
+        }
+    }
+}
+```
+
+MCP tools are auto-discovered from the server. Use `call.kind` (`ToolCallKind.Local` / `ToolCallKind.Mcp(serverName)`) to route differently.
+
+## Session API
+
+```kotlin
+interface Session {
+    suspend fun send(text: String, onEvent: (SessionEvent) -> Unit = {})
+    fun update(block: SessionConfig.Builder.() -> Unit)
+    suspend fun getHistory(): List<ChatTurn>
+    suspend fun resetConversation()
+    suspend fun close()
+}
+```
+
+- `send`: start a new user round. Events arrive via `onEvent`.
+- `update`: change config for future rounds. Running rounds are not interrupted.
+- `getHistory`: returns the conversation history (`ChatTurn.User`, `ChatTurn.Assistant`, `ChatTurn.ToolResult`).
+- `resetConversation`: clear history. Use when switching model, MCP servers, or starting a new conversation.
+- `close`: release session resources.
+
+## SessionEvent
+
+```kotlin
+sealed interface SessionEvent {
+    data class RoundStarted(val input: String)
+    data class TextDelta(val delta: String, val fullText: String)
+    data class ToolRunning(val callId: String, val toolName: String, val kind: ToolCallKind)
+    data class ToolSucceeded(val callId: String, val toolName: String, val kind: ToolCallKind, val resultJson: String)
+    data class ToolFailed(val callId: String, val toolName: String, val kind: ToolCallKind, val message: String, val resultJson: String?)
+    data class RoundCompleted(val fullText: String)
+    data class Error(val stage: Stage, val message: String, val cause: Throwable? = null)
+}
+```
+
+## Config reference
+
+Set via `Session.open { }` or `session.update { }`:
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `endpoint` | `String` | `""` | Request URL (any OpenAI-compatible endpoint) |
+| `apiKey` | `String` | `""` | Injected as `Authorization: Bearer <apiKey>` |
+| `model` | `String` | `""` | Model name sent in the request body |
+| `systemPrompt` | `String?` | `null` | Optional system prompt |
+| `temperature` | `Float` | `0.7f` | Sampling temperature |
+| `connectTimeoutSeconds` | `Long` | `30` | Connection timeout in seconds |
+| `readTimeoutSeconds` | `Long` | `60` | Read timeout in seconds |
+| `writeTimeoutSeconds` | `Long` | `30` | Write timeout in seconds |
+
+The following are open-only (changes in `update` are ignored):
+- `jsonCodec: JsonCodec?` — custom JSON codec (default: Gson)
+- `httpEngine: HttpEngine?` — custom HTTP engine (default: OkHttp)
+
+## FAQ
+
+### Why does ConfigInvalidException occur?
+
+When `endpoint` is not `http(s)` or `model` is blank, `send()` throws `ConfigInvalidException` and emits `SessionEvent.Error(stage = Stage.Session, ...)`.
+
+### Why do tool_calls need waiting?
+
+OpenAI-style streaming `tool_calls` may be split across multiple SSE chunks. The library merges fragments internally and only starts tool execution after the stream completes. Once all tool results are collected, it automatically continues the next round.

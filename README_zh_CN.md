@@ -1,6 +1,6 @@
-# S3ss10n
+# s3ss10n
 
-一个面向 Android 的、基于 OkHttp + SSE 的流式 Chat Completions 客户端封装，提供会话级别的历史管理与 OpenAI 兼容的 Tool Calling 支持。
+一个面向 Android 的、基于 OkHttp + SSE 的流式 Chat Completions 客户端封装，提供会话级别的历史管理、OpenAI 兼容的 Tool Calling，以及 MCP 支持。
 
 Demo：本仓库包含一个可运行的 demo app，见 <https://github.com/niki914/s3ss10n/tree/main/app>
 
@@ -10,12 +10,14 @@ Demo.apk：[Demo.apk](https://github.com/niki914/s3ss10n/releases/latest)
 
 - 面向 OpenAI 兼容接口的流式输出（SSE）
 - 会话封装：自动维护 history（user/assistant/tool），以及回合状态
-- Tool Calling：支持将流式分片的 tool_calls 合并为完整调用，并串行回传 tool 结果
-- 动态网络配置：BaseUrl、超时、Proxy、额外 Interceptor
+- Tool Calling：将流式分片的 tool_calls 合并为完整调用，并自动回传 tool 结果继续下一轮
+- 本地工具 DSL：带类型化参数 schema 声明
+- MCP（Model Context Protocol）HTTP server 支持，自动发现工具
+- 动态配置：endpoint、model、超时、system prompt、temperature
 
 ## 安装
 
-### Gradle
+### Gradle (JitPack)
 
 ```kotlin
 dependencyResolutionManagement {
@@ -35,63 +37,27 @@ dependencies {
 
 ## 快速开始
 
-核心类是 `ChatSession`（见 [ChatSession.kt](./s3ss10n/src/main/java/com/niki914/s3ss10n/ChatSession.kt)）。它负责：
-
-- 维护对话历史（见 [ChatPair.kt](./s3ss10n/src/main/java/com/niki914/s3ss10n/ChatPair.kt)）
-- 驱动流式请求与回调分发
-- 遇到 tool call 时等待业务侧返回 tool 结果，并自动发起下一轮补全
-
-### 1) 创建会话并配置
+核心入口是 `Session`。用 `Session.open` 创建，用 `send` 发送消息，通过事件回调观察结果。
 
 ```kotlin
-val session = ChatSession().apply {
-    callback = object : ChatSession.Callback {
-        override fun onConfigInvalid() {
-        }
+val session = Session.open<SessionProtocols.OpenAI> {
+    endpoint = "https://api.openai.com/v1/chat/completions"
+    apiKey = "YOUR_API_KEY"
+    model = "gpt-4o-mini"
+    systemPrompt = "You are a helpful assistant."
+}
 
-        override fun onStarted() {
-        }
-
-        override fun onUpdated() {
-        }
-
-        override fun onContent(aiContent: AIContent) {
-        }
-
-        override fun onError(message: String, cause: Throwable?) {
-        }
-
-        override suspend fun onToolCall(toolCall: ToolCall): Message.Tool {
-            return Message.Tool(
-                toolCallId = toolCall.id ?: "tool_call_id",
-                name = toolCall.function?.name ?: "tool_name",
-                content = "{}"
-            )
-        }
-
-        override fun onCompleted(isSuccess: Boolean, cause: Throwable?) {
-        }
+session.send("Hello") { event ->
+    when (event) {
+        is SessionEvent.TextDelta -> print(event.delta)
+        is SessionEvent.RoundCompleted -> println("\nDone: ${event.fullText}")
+        is SessionEvent.Error -> println("Error: ${event.message}")
+        else -> Unit
     }
 }
-
-session.updateConfig {
-    baseUrl = "https://api.openai.com/v1/chat/completions"
-    apiKey = "YOUR_API_KEY"
-    modelName = "gpt-4o-mini"
-    prompt = "You are a helpful assistant."
-
-    readTimeout = 60
-    connectTimeout = 30
-    writeTimeout = 30
-
-    // 可选：代理
-    // httpProxy("127.0.0.1", 7890)
-}
-
-session.preConnect()
 ```
 
-`baseUrl` 是本库最终发起请求时使用的 URL，并不强制必须以 `/v1/chat/completions` 结尾。
+`endpoint` 是本库最终发起请求时使用的 URL，并不强制必须以 `/v1/chat/completions` 结尾。
 只要你的服务端接受 OpenAI 风格的 Chat Completions 请求体，就可以按服务端要求填写对应的 endpoint。
 
 示例：
@@ -99,128 +65,145 @@ session.preConnect()
 - OpenAI：`https://api.openai.com/v1/chat/completions`
 - Ollama（OpenAI 兼容 endpoint）：`http://localhost:11434/v1/chat/completions`
 
-### 2) 发送消息
-
-```kotlin
-session.sendMessage("Hello")
-```
-
-### 3) 获取历史
-
-```kotlin
-val history: List<ChatPair> = session.getHistory()
-```
-
-`ChatPair` 的 `state` 表示当前回合状态（Pending / Generating / Succeeded / Failed）。
-
 ## Tool Calling
 
-本库对 OpenAI 风格的 `tool_calls` 做了两层封装：
+s3ss10n 自动合并流式 `tool_calls` 分片。通过 `hooks { ... }` 拦截工具调用并返回结果。
 
-- 协议层：`ToolDefinition`（见 [RequestModel.kt](./s3ss10n/src/main/java/com/niki914/s3ss10n/chat/protocol/RequestModel.kt)）、`ToolCall`（见 [ResponseModel.kt](./s3ss10n/src/main/java/com/niki914/s3ss10n/chat/protocol/ResponseModel.kt)）、`Message.Tool`（见 [Message.kt](./s3ss10n/src/main/java/com/niki914/s3ss10n/chat/protocol/beans/Message.kt)）
-- 业务层：在 `onToolCall` 中返回 `Message.Tool`，会话会在所有 tool call 结果就绪后自动继续下一轮补全
-
-### 使用 ToolManager（推荐）
-
-`s3ss10n` 提供了一个轻量的工具注册与执行器：
-
-- `ToolManager`（见 [ToolManager.kt](./s3ss10n/src/main/java/com/niki914/s3ss10n/toolbase/ToolManager.kt)）
-- `ToolModel`（见 [ToolModel.kt](./s3ss10n/src/main/java/com/niki914/s3ss10n/toolbase/ToolModel.kt)）
-- `ToolCallJsonTransformLayer`（见 [ToolCallJsonTransformLayer.kt](./s3ss10n/src/main/java/com/niki914/s3ss10n/toolbase/ToolCallJsonTransformLayer.kt)）
-
-#### 1) 定义一个 Tool
+### 1) 注册本地工具
 
 ```kotlin
-class GetCurrentTimeTool : ToolModel() {
-    override val name: String = "getCurrentTime"
-    override val description: String = "获取当前时间"
+val session = Session.open<SessionProtocols.OpenAI> {
+    endpoint = "https://api.openai.com/v1/chat/completions"
+    apiKey = "YOUR_API_KEY"
+    model = "gpt-4o-mini"
 
-    override suspend fun ToolCallJsonTransformLayer.execInternal() {
-        val timezone = getFromToolCall<String>("timezone") ?: "UTC"
-        this["timezone"] = timezone
-        this["time"] = System.currentTimeMillis().toString()
-    }
-}
-```
-
-如果你希望让模型更可靠地产生参数，可以定义 `properties/required`：
-
-```kotlin
-class WeatherTool : ToolModel() {
-    override val name: String = "getCurrentWeather"
-    override val description: String = "查询城市天气"
-
-    override val properties = mapOf(
-        "location" to PropertyDefinition(
-            type = "string",
-            description = "城市名，例如：北京"
-        )
-    )
-    override val required = listOf("location")
-
-    override suspend fun ToolCallJsonTransformLayer.execInternal() {
-        val location = getFromToolCall<String>("location") ?: run {
-            state = ToolCallJsonTransformLayer.ResponseState.IllegalArgs
-            return
+    localTools {
+        add("getCurrentWeather") {
+            description = "查询城市天气"
+            string("location") {
+                description = "城市名，例如：北京"
+                required = true
+            }
         }
-
-        this["location"] = location
-        this["weather"] = "sunny"
     }
 }
 ```
 
-#### 2) 注册工具并注入 tools 描述
+### 2) 在 hooks 中处理工具调用
 
 ```kotlin
-val toolManager = ToolManager().apply {
-    registerTool(GetCurrentTimeTool())
-    registerTool(WeatherTool())
-}
+val session = Session.open<SessionProtocols.OpenAI> {
+    // ... endpoint, apiKey, model ...
 
-session.updateConfig {
-    tools = toolManager.descriptions
+    hooks { call ->
+        when (call.name) {
+            "getCurrentWeather" -> ok("""{"weather":"sunny","location":"北京"}""")
+            else -> delegate()
+        }
+    }
+
+    localTools {
+        add("getCurrentWeather") {
+            description = "查询城市天气"
+            string("location") {
+                description = "城市名"
+                required = true
+            }
+        }
+    }
 }
 ```
 
-#### 3) 在 onToolCall 中执行并回传结果
+`hooks { ... }` 接收 `ToolCallRequest`，必须返回 `Message.Tool`。可用方法：
+- `ok(contentJson)` — 成功
+- `error(message)` — 失败
+- `delegate()` — 交给默认处理器（例如 MCP 工具）
+
+### 3) MCP 工具
 
 ```kotlin
-override suspend fun onToolCall(toolCall: ToolCall): Message.Tool {
-    val json = toolManager.exec(
-        toolCall = toolCall,
-        appParams = mapOf(
-            "context" to appContext
-        )
-    )
+val session = Session.open<SessionProtocols.OpenAI> {
+    endpoint = "https://api.openai.com/v1/chat/completions"
+    apiKey = "YOUR_API_KEY"
+    model = "gpt-4o-mini"
 
-    return Message.Tool(
-        toolCallId = toolCall.id!!,
-        name = toolCall.function!!.name!!,
-        content = json
-    )
+    hooks { call ->
+        when (call.kind) {
+            ToolCallKind.Local -> {
+                // 在这里处理本地工具
+                delegate()
+            }
+            is ToolCallKind.Mcp -> delegate()
+        }
+    }
+
+    mcp {
+        add("aslocate") {
+            http { url = "http://127.0.0.1:51338/mcp" }
+        }
+    }
+}
+```
+
+MCP 工具会自动从服务端发现。可通过 `call.kind`（`ToolCallKind.Local` / `ToolCallKind.Mcp(serverName)`）做分流。
+
+## Session API
+
+```kotlin
+interface Session {
+    suspend fun send(text: String, onEvent: (SessionEvent) -> Unit = {})
+    fun update(block: SessionConfig.Builder.() -> Unit)
+    suspend fun getHistory(): List<ChatTurn>
+    suspend fun resetConversation()
+    suspend fun close()
+}
+```
+
+- `send`：发起一轮新的用户输入，事件通过 `onEvent` 回调
+- `update`：更新后续轮次使用的配置，不影响正在运行的轮次
+- `getHistory`：返回对话历史（`ChatTurn.User`、`ChatTurn.Assistant`、`ChatTurn.ToolResult`）
+- `resetConversation`：清空历史，通常在切换模型、MCP 或新建对话时调用
+- `close`：释放会话资源
+
+## SessionEvent
+
+```kotlin
+sealed interface SessionEvent {
+    data class RoundStarted(val input: String)
+    data class TextDelta(val delta: String, val fullText: String)
+    data class ToolRunning(val callId: String, val toolName: String, val kind: ToolCallKind)
+    data class ToolSucceeded(val callId: String, val toolName: String, val kind: ToolCallKind, val resultJson: String)
+    data class ToolFailed(val callId: String, val toolName: String, val kind: ToolCallKind, val message: String, val resultJson: String?)
+    data class RoundCompleted(val fullText: String)
+    data class Error(val stage: Stage, val message: String, val cause: Throwable? = null)
 }
 ```
 
 ## 配置项
 
-通过 `ConfigBuilder` 配置（见 [ConfigBuilder.kt](./s3ss10n/src/main/java/com/niki914/s3ss10n/util/ConfigBuilder.kt)）：
+通过 `Session.open { }` 或 `session.update { }` 设置：
 
-- `baseUrl`: 实际请求 URL（可按服务端要求填写，不强制 `/v1/chat/completions`）
-- `apiKey`: 会作为 `Authorization: Bearer <apiKey>` 注入
-- `modelName`: 请求体 `model`
-- `prompt`: 可选 system prompt
-- `tools`: 可选 tool definitions
-- `readTimeout/connectTimeout/writeTimeout`: 秒
-- `proxy`: `httpProxy(...)` / `socksProxy(...)`
-- `interceptors`: 额外 OkHttp Interceptor
+| 字段 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `endpoint` | `String` | `""` | 请求 URL（任意 OpenAI 兼容 endpoint） |
+| `apiKey` | `String` | `""` | 以 `Authorization: Bearer <apiKey>` 注入 |
+| `model` | `String` | `""` | 请求体 `model` 字段 |
+| `systemPrompt` | `String?` | `null` | 可选 system prompt |
+| `temperature` | `Float` | `0.7f` | 采样温度 |
+| `connectTimeoutSeconds` | `Long` | `30` | 连接超时（秒） |
+| `readTimeoutSeconds` | `Long` | `60` | 读取超时（秒） |
+| `writeTimeoutSeconds` | `Long` | `30` | 写入超时（秒） |
+
+以下字段仅 `open` 时生效（`update` 中修改被忽略）：
+- `jsonCodec: JsonCodec?` — 自定义 JSON 编解码器（默认 Gson）
+- `httpEngine: HttpEngine?` — 自定义 HTTP 引擎（默认 OkHttp）
 
 ## 常见问题
 
-### 1) 为什么提示 Config 无效？
+### 为什么提示 Config 无效？
 
-当 `baseUrl` 不是 `http(s)` 或 `modelName` 为空时，会触发 `ConfigInvalidException`（见 [Config.kt](./s3ss10n/src/main/java/com/niki914/s3ss10n/Config.kt)）并回调 `onConfigInvalid()`。
+当 `endpoint` 不是 `http(s)` 或 `model` 为空时，`send()` 会抛出 `ConfigInvalidException` 并发送 `SessionEvent.Error(stage = Stage.Session, ...)`。
 
-### 2) tool_calls 为什么需要等待？
+### tool_calls 为什么需要等待？
 
-OpenAI 风格的流式 `tool_calls` 可能被拆分成多段传输。库内部会将分片合并为完整 JSON 参数（见 [ToolCallHandler.kt](./s3ss10n/src/main/java/com/niki914/s3ss10n/util/ToolCallHandler.kt)），并在本轮流式结束后汇总 tool 执行结果再继续下一轮补全（见 [ChatSession.kt](./s3ss10n/src/main/java/com/niki914/s3ss10n/ChatSession.kt)）。
+OpenAI 风格的流式 `tool_calls` 可能被拆分成多段 SSE 传输。库内部会将分片合并为完整参数，并在本轮流式结束后汇总 tool 执行结果再继续下一轮补全。
