@@ -34,6 +34,14 @@ data class McpServerConfig(
         }
         return newConfig
     }
+
+    internal fun discoveryFingerprint(serverName: String): String {
+        val transportPart = when (val current = transport) {
+            is McpTransport.Http -> "http:${current.url}"
+        }
+        val headersPart = headers.toSortedMap().entries.joinToString("&") { "${it.key}=${it.value}" }
+        return "$serverName|enabled=$enabled|transport=$transportPart|headers=$headersPart"
+    }
 }
 
 interface McpRegistry {
@@ -49,10 +57,12 @@ internal class McpRegistryImpl : McpRegistry {
 
     override fun add(name: String, block: McpServerConfig.() -> Unit) {
         _servers[name] = McpServerConfig().apply(block)
+        logServer("add", name, _servers.getValue(name))
     }
 
     override fun replace(name: String, block: McpServerConfig.() -> Unit) {
         _servers[name] = McpServerConfig().apply(block)
+        logServer("replace", name, _servers.getValue(name))
     }
 
     override fun remove(name: String) {
@@ -66,18 +76,41 @@ internal class McpRegistryImpl : McpRegistry {
         }
     }
 
-    internal fun toToolDescriptors(codec: com.niki914.s3ss10n.json.JsonCodec): List<ToolDescriptor> =
+    internal fun toToolDescriptors(
+        codec: com.niki914.s3ss10n.json.JsonCodec,
+        discoveredTools: Map<String, List<McpDiscoveredTool>> = emptyMap()
+    ): List<ToolDescriptor> =
         _servers.flatMap { (serverName, server) ->
             if (!server.enabled) {
                 emptyList()
             } else {
-                server.tools.map { (toolName, toolConfig) ->
+                val discovered = discoveredTools[serverName].orEmpty().associateBy { it.name }
+                val explicit = server.tools.map { (toolName, toolConfig) ->
                     toolConfig.toToolDescriptor(
                         toolName = toolName,
                         kind = ToolCallKind.Mcp(serverName),
                         codec = codec
                     )
                 }
+                val explicitNames = explicit.map { it.name }.toSet()
+                val discoveredDescriptors = discovered.values
+                    .filterNot { it.name in explicitNames }
+                    .map { tool ->
+                        ToolDescriptor(
+                            name = tool.name,
+                            description = tool.description,
+                            inputSchema = tool.inputSchema,
+                            kind = ToolCallKind.Mcp(serverName)
+                        )
+                    }
+                discoveredDescriptors + explicit
             }
         }
+
+    private fun logServer(action: String, name: String, server: McpServerConfig) {
+        android.util.Log.d(
+            "qwerqwer",
+            "McpRegistry.$action name=$name enabled=${server.enabled} transport=${server.transport} explicitTools=${server.tools.keys}"
+        )
+    }
 }

@@ -46,15 +46,30 @@ open class SessionConfig {
         _appParams.apply(block)
     }
 
-    internal fun buildToolCatalog(codec: JsonCodec): ToolCatalog =
-        ToolCatalog(
-            descriptors = localToolRegistry.toToolDescriptors(codec) +
-                mcpRegistry.toToolDescriptors(codec)
+    internal fun buildToolCatalog(
+        codec: JsonCodec,
+        discoveredMcpTools: Map<String, List<McpDiscoveredTool>> = emptyMap()
+    ): ToolCatalog {
+        val localDescriptors = localToolRegistry.toToolDescriptors(codec)
+        val mcpDescriptors = mcpRegistry.toToolDescriptors(codec, discoveredMcpTools)
+        android.util.Log.d(
+            "qwerqwer",
+            "SessionConfig.buildToolCatalog local=${localDescriptors.map { it.name }} " +
+                "explicitMcp=${mcpRegistry.explicitToolNames()} " +
+                "discoveredMcp=${discoveredMcpTools.mapValues { it.value.map { tool -> tool.name } }} " +
+                "finalMcp=${mcpDescriptors.map { it.name }}"
         )
+        return ToolCatalog(
+            descriptors = localDescriptors + mcpDescriptors
+        )
+    }
 
     internal fun appParamsSnapshot(): Map<String, Any?> = _appParams.toMap()
 
-    internal fun toRoundSnapshot(codec: JsonCodec): SessionSnapshot {
+    internal fun toRoundSnapshot(
+        codec: JsonCodec,
+        discoveredMcpTools: Map<String, List<McpDiscoveredTool>> = emptyMap()
+    ): SessionSnapshot {
         return SessionSnapshot(
             endpoint = endpoint,
             apiKey = apiKey,
@@ -68,7 +83,7 @@ open class SessionConfig {
             ),
             hooksBlock = hooksBlock,
             appParams = appParamsSnapshot(),
-            tools = buildToolCatalog(codec),
+            tools = buildToolCatalog(codec, discoveredMcpTools),
             mcpServers = mcpRegistry.servers.mapValues { (_, server) -> server.deepCopy() },
             jsonCodec = codec
         )
@@ -106,4 +121,8 @@ open class SessionConfig {
             return snapshot()
         }
     }
+}
+
+private fun McpRegistryImpl.explicitToolNames(): Map<String, List<String>> {
+    return servers.mapValues { (_, server) -> server.tools.keys.toList() }
 }

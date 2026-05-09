@@ -45,6 +45,10 @@ class OpenAIProtocol(
                 temperature = snapshot.temperature
             )
         )
+        android.util.Log.d(
+            "qwerqwer",
+            "OpenAIProtocol.buildRequest tools=${snapshot.tools.descriptors.map { "${it.name}:${it.kind}" }}"
+        )
         return com.niki914.s3ss10n.net.HttpRequest(
             method = "POST",
             url = snapshot.endpoint.trim(),

@@ -9,6 +9,7 @@ import com.niki914.s3ss10n.protocol.ProtocolEvent
 import com.niki914.s3ss10n.util.HistoryKeeper
 import com.niki914.s3ss10n.util.ToolCallWaiter
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -29,6 +30,7 @@ class ChatSession internal constructor(
     private val engine: HttpEngine = initialConfig.httpEngine ?: OkHttpEngine()
     private val jsonCodec: JsonCodec = initialConfig.jsonCodec ?: GsonJsonCodec()
     private val mcpClient: McpClient = HttpMcpClient(engine = engine, codec = jsonCodec)
+    private val mcpDiscoveryCache = McpDiscoveryCache()
     private val scope = CoroutineScope(SupervisorJob())
     private var currJob: Job? = null
     private val chatMutex = Mutex()
@@ -39,6 +41,7 @@ class ChatSession internal constructor(
 
     init {
         initialConfig.localToolRegistry.codec = jsonCodec
+        scheduleDiscovery(initialConfig, reason = "open")
     }
 
     private class RoundContext(
@@ -50,12 +53,21 @@ class ChatSession internal constructor(
     )
 
     override suspend fun send(text: String, onEvent: (SessionEvent) -> Unit) {
-        val ctx = RoundContext(configRef.get().toRoundSnapshot(jsonCodec), onEvent, text)
+        val config = configRef.get()
+        scheduleDiscovery(config, reason = "send")
+        val ctx = RoundContext(
+            config.toRoundSnapshot(
+                codec = jsonCodec,
+                discoveredMcpTools = discoveredToolsSnapshot(config)
+            ),
+            onEvent,
+            text
+        )
         runRound(ctx, text).join()
     }
 
     override fun update(block: SessionConfig.Builder.() -> Unit) {
-        configRef.updateAndGet { current ->
+        val updatedConfig = configRef.updateAndGet { current ->
             val baseCodec = current.jsonCodec
             val baseEngine = current.httpEngine
             val updated = current.toBuilder().apply(block).build()
@@ -69,6 +81,7 @@ class ChatSession internal constructor(
             }
             updated
         }
+        scheduleDiscovery(updatedConfig, reason = "update", refreshCached = true)
     }
 
     override suspend fun getHistory(): List<ChatTurn> {
@@ -361,6 +374,86 @@ class ChatSession internal constructor(
             is IllegalArgumentException -> SessionEvent.Stage.Session
             is IllegalStateException -> SessionEvent.Stage.Parse
             else -> SessionEvent.Stage.Transport
+        }
+    }
+
+    private fun discoveredToolsSnapshot(config: SessionConfig): Map<String, List<McpDiscoveredTool>> {
+        return config.mcpRegistry.servers.mapNotNull { (serverName, server) ->
+            if (!server.enabled) {
+                android.util.Log.d("qwerqwer", "MCP discovery cache skip server=$serverName reason=disabled")
+                return@mapNotNull null
+            }
+            val fingerprint = server.discoveryFingerprint(serverName)
+            val tools = mcpDiscoveryCache.snapshot(serverName, fingerprint)
+            android.util.Log.d(
+                "qwerqwer",
+                "MCP discovery cache ${if (tools == null) "miss" else "hit"} server=$serverName " +
+                    "fingerprint=$fingerprint tools=${tools?.map { it.name }.orEmpty()}"
+            )
+            tools?.let { serverName to it }
+        }.toMap()
+    }
+
+    private fun scheduleDiscovery(
+        config: SessionConfig,
+        reason: String,
+        refreshCached: Boolean = false
+    ) {
+        config.mcpRegistry.servers.forEach { (serverName, serverConfig) ->
+            if (!serverConfig.enabled) {
+                android.util.Log.d("qwerqwer", "MCP discovery skipped server=$serverName reason=disabled")
+                return@forEach
+            }
+            val fingerprint = serverConfig.discoveryFingerprint(serverName)
+            if (!refreshCached && mcpDiscoveryCache.snapshot(serverName, fingerprint) != null) {
+                android.util.Log.d(
+                    "qwerqwer",
+                    "MCP discovery skipped server=$serverName fingerprint=$fingerprint reason=cache-hit"
+                )
+                return@forEach
+            }
+            if (!mcpDiscoveryCache.markRefreshing(serverName, fingerprint)) {
+                android.util.Log.d(
+                    "qwerqwer",
+                    "MCP discovery skipped server=$serverName fingerprint=$fingerprint reason=already-refreshing"
+                )
+                return@forEach
+            }
+            val serverSnapshot = serverConfig.deepCopy()
+            android.util.Log.d(
+                "qwerqwer",
+                "MCP discovery scheduled server=$serverName fingerprint=$fingerprint reason=$reason"
+            )
+            scope.launch {
+                try {
+                    val tools = mcpClient.listTools(serverSnapshot)
+                    val latestServer = configRef.get().mcpRegistry.servers[serverName]
+                    if (latestServer?.enabled == true &&
+                        latestServer.discoveryFingerprint(serverName) == fingerprint
+                    ) {
+                        mcpDiscoveryCache.put(serverName, fingerprint, tools)
+                        android.util.Log.d(
+                            "qwerqwer",
+                            "MCP discovery success server=$serverName tools=${tools.map { it.name }}"
+                        )
+                    } else {
+                        android.util.Log.d(
+                            "qwerqwer",
+                            "MCP discovery stale ignored server=$serverName fingerprint=$fingerprint"
+                        )
+                    }
+                } catch (ce: CancellationException) {
+                    throw ce
+                } catch (t: Throwable) {
+                    android.util.Log.d(
+                        "qwerqwer",
+                        "MCP discovery failed server=$serverName error=${t.message}",
+                        t
+                    )
+                } finally {
+                    mcpDiscoveryCache.markFinished(serverName, fingerprint)
+                }
+            }
         }
     }
 }
