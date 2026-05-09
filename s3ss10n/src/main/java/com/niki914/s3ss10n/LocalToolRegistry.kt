@@ -1,6 +1,6 @@
 package com.niki914.s3ss10n
 
-import com.niki914.s3ss10n.json.GsonJsonCodec
+import com.niki914.s3ss10n.ext.json.GsonJsonCodec
 import com.niki914.s3ss10n.json.JsonCodec
 
 enum class ToolValueType(val jsonType: String) {

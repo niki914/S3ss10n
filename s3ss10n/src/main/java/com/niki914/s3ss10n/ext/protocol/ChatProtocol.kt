@@ -1,4 +1,4 @@
-package com.niki914.s3ss10n.protocol
+package com.niki914.s3ss10n.ext.protocol
 
 import com.niki914.s3ss10n.ChatTurn
 import com.niki914.s3ss10n.SessionSnapshot

@@ -1,11 +1,11 @@
 package com.niki914.s3ss10n
 
-import com.niki914.s3ss10n.json.GsonJsonCodec
+import com.niki914.s3ss10n.ext.json.GsonJsonCodec
 import com.niki914.s3ss10n.json.JsonCodec
 import com.niki914.s3ss10n.net.HttpEngine
-import com.niki914.s3ss10n.net.OkHttpEngine
-import com.niki914.s3ss10n.protocol.ChatProtocol
-import com.niki914.s3ss10n.protocol.ProtocolEvent
+import com.niki914.s3ss10n.ext.net.OkHttpEngine
+import com.niki914.s3ss10n.ext.protocol.ChatProtocol
+import com.niki914.s3ss10n.ext.protocol.ProtocolEvent
 import com.niki914.s3ss10n.util.HistoryKeeper
 import com.niki914.s3ss10n.util.ToolCallWaiter
 import java.util.concurrent.atomic.AtomicReference

@@ -1,5 +1,7 @@
-package com.niki914.s3ss10n.net
+package com.niki914.s3ss10n.ext.net
 
+import com.niki914.s3ss10n.net.HttpEngine
+import com.niki914.s3ss10n.net.HttpRequest
 import com.niki914.s3ss10n.xTry
 import com.niki914.s3ss10n.xTrySuspend
 import kotlinx.coroutines.channels.awaitClose

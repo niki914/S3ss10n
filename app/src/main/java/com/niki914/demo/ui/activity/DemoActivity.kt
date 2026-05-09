@@ -20,8 +20,6 @@ class DemoActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        // phase4 手工 smoke 入口，非长期生产逻辑。
-        com.niki914.s3ss10n.smoketest.main()
 
 //        vm.sendIntent(ChatIntent.SetConfig {
 //            endpoint = ""

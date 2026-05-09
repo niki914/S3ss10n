@@ -1,4 +1,4 @@
-package com.niki914.s3ss10n.protocol.openai
+package com.niki914.s3ss10n.ext.protocol.openai
 
 import androidx.annotation.Keep
 

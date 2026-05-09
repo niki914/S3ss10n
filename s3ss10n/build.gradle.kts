@@ -44,8 +44,6 @@ afterEvaluate {
 }
 
 dependencies {
-    implementation("com.github.niki914:cmd-android:0.8.2")
-
     implementation("com.google.code.gson:gson:2.11.0")
 
     implementation(kotlin("reflect"))

@@ -1,6 +1,7 @@
-package com.niki914.s3ss10n.json
+package com.niki914.s3ss10n.ext.json
 
 import com.google.gson.Gson
+import com.niki914.s3ss10n.json.JsonCodec
 import com.niki914.s3ss10n.xTry
 
 class GsonJsonCodec(private val gson: Gson = Gson()) : JsonCodec {

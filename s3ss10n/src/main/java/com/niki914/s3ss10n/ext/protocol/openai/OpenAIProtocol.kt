@@ -1,15 +1,15 @@
-package com.niki914.s3ss10n.protocol.openai
+package com.niki914.s3ss10n.ext.protocol.openai
 
 import com.niki914.s3ss10n.ChatTurn
 import com.niki914.s3ss10n.SessionEvent
 import com.niki914.s3ss10n.SessionSnapshot
 import com.niki914.s3ss10n.ToolCallSpec
 import com.niki914.s3ss10n.ToolDescriptor
-import com.niki914.s3ss10n.json.GsonJsonCodec
+import com.niki914.s3ss10n.ext.json.GsonJsonCodec
 import com.niki914.s3ss10n.json.JsonCodec
 import com.niki914.s3ss10n.net.HttpRequest
-import com.niki914.s3ss10n.protocol.ChatProtocol
-import com.niki914.s3ss10n.protocol.ProtocolEvent
+import com.niki914.s3ss10n.ext.protocol.ChatProtocol
+import com.niki914.s3ss10n.ext.protocol.ProtocolEvent
 import com.niki914.s3ss10n.xLog
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow

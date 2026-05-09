@@ -1,4 +1,4 @@
-package com.niki914.s3ss10n.protocol
+package com.niki914.s3ss10n.ext.protocol
 
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.reflect.KClass

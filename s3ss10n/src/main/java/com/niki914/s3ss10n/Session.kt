@@ -1,7 +1,7 @@
 package com.niki914.s3ss10n
 
-import com.niki914.s3ss10n.protocol.ChatProtocol
-import com.niki914.s3ss10n.protocol.ProtocolRegistry
+import com.niki914.s3ss10n.ext.protocol.ChatProtocol
+import com.niki914.s3ss10n.ext.protocol.ProtocolRegistry
 import kotlin.reflect.KClass
 
 interface Session {

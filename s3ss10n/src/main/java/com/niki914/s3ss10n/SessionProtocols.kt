@@ -1,8 +1,8 @@
 package com.niki914.s3ss10n
 
-import com.niki914.s3ss10n.protocol.ChatProtocol
-import com.niki914.s3ss10n.protocol.ProtocolRegistry
-import com.niki914.s3ss10n.protocol.openai.OpenAIProtocol
+import com.niki914.s3ss10n.ext.protocol.ChatProtocol
+import com.niki914.s3ss10n.ext.protocol.ProtocolRegistry
+import com.niki914.s3ss10n.ext.protocol.openai.OpenAIProtocol
 
 object SessionProtocols {
     object OpenAI : ChatProtocol by OpenAIProtocol()
