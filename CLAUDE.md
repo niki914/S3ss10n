@@ -25,7 +25,7 @@
 <source-index module=":s3ss10n">
 
   <layer name="public-api" path="s3ss10n/src/main/java/com/niki914/s3ss10n/">
-    <note>Phase 1 完成。新公开 API 就位，内部通过 SessionImpl 包装旧 ChatSession。</note>
+    <note>Phase 2 完成。ChatSession 直接实现 Session，SessionImpl 已删除，Callback 已消除。</note>
 
     <file name="Session.kt">
       <role>主入口 interface。开发者唯一接触的会话对象。</role>
@@ -37,11 +37,6 @@
         companion.open(block: SessionConfig.() -> Unit): Session
       </contract>
       <note>update{} 暂未暴露（待 Phase 3）。</note>
-    </file>
-
-    <file name="SessionImpl.kt">
-      <role>Session 的内部实现。持有 ChatSession 并实现 ChatSession.Callback，将内部 ChatEvent 映射为 SessionEvent。</role>
-      <note>Phase 2 目标：消除此适配层，将逻辑直接内联到 ChatSession。</note>
     </file>
 
     <file name="SessionConfig.kt">
@@ -83,14 +78,21 @@
     <!-- 以下为旧 API，仍存在于内部但不再推荐直接使用 -->
 
     <file name="ChatSession.kt">
-      <role>旧主入口。SessionImpl 内部持有并作为 Callback 桥接。对外已由 Session 替代。</role>
-      <callback-interface>Callback: onConfigInvalid, onStarted, onUpdated, onContent, onError, onToolCall(suspend), onCompleted</callback-interface>
+      <role>Session 的内部实现。直接实现 Session 接口，持有 ChatClient、HistoryKeeper、ToolCallWaiter 协调流式对话和工具调用。</role>
+      <constructor>新增 constructor(config: SessionConfig)，由 Session.open{} 调用。</constructor>
       <state-machine>
-        Idle → sendMessage() → 清理上一轮 → 发送请求 → 流式接收 → Complete
-        → 若有待处理 toolCall → 等待工具结果 → 递归调用 sendMessage(null)
-        → 否则 → 回调 onCompleted()
+        send(text, onEvent) → 清空 textAccumulator → applyConfig → sendMessage(text)
+        → cleanUpCurrWork() → HistoryKeeper.addUserMsg() → ChatClient.sendMessages()
+        → 收集 ChatEvent:
+          → Start → emit RoundStarted
+          → AI(Text) → 累积 textAccumulator → emit TextDelta
+          → ToolCallIntent → enqueue to ToolCallWaiter → handleToolCall() → hooks{} 调度 → emit ToolRunning/Succeeded/Failed
+          → Complete → 若有 toolCall 则 responseToolCalls() 递归 sendMessage(null)
+                     → 否则 emit RoundCompleted
+          → Error → emit Error (按 ConfigInvalidException 区分 stage)
         reset() → 取消当前 Job → 清空 HistoryKeeper → 取消 ToolCallWaiter
       </state-machine>
+      <note>已移除 Callback 接口和 updateConfig() 公开方法。applyConfig() 为内部方法。</note>
     </file>
 
     <file name="ChatClient.kt">
@@ -109,7 +111,7 @@
 
   <layer name="chat-stream" path="s3ss10n/src/main/java/com/niki914/s3ss10n/chat/">
     <file name="ChatBeans.kt">
-      <role>内部流式管道事件。sealed AIContent、sealed ChatEvent。SessionImpl 将它们映射为 SessionEvent。</role>
+      <role>内部流式管道事件。sealed AIContent、sealed ChatEvent。ChatSession 内部消费，直接映射为 SessionEvent 后发射给用户 onEvent。</role>
     </file>
     <file name="ChatService.kt">
       <role>内部。桥接 OkHttp 调用 → SseClient + SseToChatTransformLayer。</role>
@@ -145,7 +147,7 @@
   </layer>
 
   <layer name="util" path="s3ss10n/src/main/java/com/niki914/s3ss10n/util/">
-    <file name="ConfigBuilder.kt"><role>内部。SessionConfig → Config 的桥梁。保留 socksProxy()、httpProxy()。</role></file>
+    <file name="ConfigBuilder.kt"><role>内部。SessionConfig → Config 的桥梁。通过 ChatClient.updateConfig() 应用配置。保留 socksProxy()、httpProxy()。</role></file>
     <file name="ConfigHolder.kt"><role>基于 AtomicReference 的线程安全 Config 容器。</role></file>
     <file name="HistoryKeeper.kt"><role>线程安全 ChatPair 列表。Mutex 保护。支持向最新 Assistant 消息增量追加 text/toolCall。</role></file>
     <file name="ToolCallHandler.kt"><role>累积流式 tool_call JSON 片段，在收到完成信号时发出完整 ToolCall。</role></file>
@@ -182,31 +184,30 @@
 </source-index>
 
 <data-flow-trace>
-  <trace id="send-message-phase1">
+  <trace id="send-message-phase2">
     Session.send(text, onEvent)
-    → SessionImpl: 记录 currentInput, applyConfig()
-    → ChatSession.sendMessage(text)
+    → ChatSession: 清空 textAccumulator, 记录 currentInput, applyConfig()
+    → sendMessage(text)
       → cleanUpCurrWork()
       → HistoryKeeper.addUserMsg()
       → ChatClient.sendMessages(messages)
         → ChatService.newChat(requestBody)
           → SseClient.execute() → SseEvent Flow
           → SseToChatTransformLayer → ChatEvent Flow
-      ← ChatSession 收集 ChatEvent:
-        → ChatEvent.Start → SessionImpl.onStarted() → SessionEvent.RoundStarted
-        → ChatEvent.AI(Text) → SessionImpl.onContent() → SessionEvent.TextDelta
-        → ChatEvent.ToolCallIntent → SessionImpl.onToolCall()
-          → 构建 ToolCallRequest → 发射 ToolRunning
-          → 调用 hooks{} block → 返回 Message.Tool
-          → 发射 ToolSucceeded / ToolFailed
-        → ChatEvent.Complete → SessionImpl.onCompleted()
-          → 若有 tool calls → ChatSession.responseToolCalls() → 递归 sendMessage(null)
-          → 否则 → SessionEvent.RoundCompleted
-        → ChatEvent.Error → SessionImpl.onError() → SessionEvent.Error
+      ← ChatSession 收集 ChatEvent + 直接发射 SessionEvent:
+        → ChatEvent.Start → emit RoundStarted (不重置 textAccumulator)
+        → ChatEvent.AI(Text) → 累积 textAccumulator → emit TextDelta
+        → ChatEvent.ToolCallIntent → enqueue ToolCallWaiter → handleToolCall()
+          → 构建 ToolCallRequest → emit ToolRunning
+          → 调用 hooks{} block → emit ToolSucceeded/ToolFailed → 返回 Message.Tool
+        → ChatEvent.Complete → 若有 toolCall → responseToolCalls() → 递归 sendMessage(null)
+          → textAccumulator 跨轮继续累积（不清空）
+          → 否则 → emit RoundCompleted(fullText)
+        → ChatEvent.Error → emit Error (stage 按异常类型区分)
   </trace>
   <trace id="known-issue">
-    <issue>TextDelta.fullText 在 tool-call 触发的递归 send 中会清空。textAccumulator 只累积单次 sendMessage() 的文本，跨递归轮不累计。</issue>
-    <issue>SessionImpl 是薄适配层，ChatSession.Callback 仍在中间，Phase 2 应消除。</issue>
+    <issue>update{} 未实现：Session 接口无 update 方法，SessionConfig 构造后不可变。</issue>
+    <issue>MCP 仅占位：McpTypes.kt 编译通过但 delegate() 始终返回 "not implemented"。</issue>
   </trace>
 </data-flow-trace>
 
