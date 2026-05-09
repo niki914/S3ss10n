@@ -2,7 +2,6 @@ package com.niki914.s3ss10n.net
 
 import com.niki914.s3ss10n.SessionConfig
 import com.niki914.s3ss10n.util.DynamicProxySelector
-import com.niki914.s3ss10n.util.gson
 import com.niki914.s3ss10n.util.interceptors.ChatApiInterceptor
 import com.niki914.s3ss10n.util.interceptors.DynamicTimeoutInterceptor
 import com.niki914.s3ss10n.util.interceptors.DynamicURLInterceptor

@@ -12,6 +12,12 @@ open class SessionConfig {
     var readTimeoutSeconds: Long = 60
     var writeTimeoutSeconds: Long = 30
 
+    /**
+     * 自定义 JSON 编解码器。
+     * null 表示使用默认的 GsonJsonCodec()。
+     */
+    var jsonCodec: com.niki914.s3ss10n.json.JsonCodec? = null
+
     internal var hooksBlock: (suspend ToolCallRequest.() -> String)? = null
     internal val localToolRegistry = LocalToolRegistryImpl()
     internal val mcpRegistry = McpRegistryImpl()
@@ -57,6 +63,7 @@ open class SessionConfig {
         target.connectTimeoutSeconds = connectTimeoutSeconds
         target.readTimeoutSeconds = readTimeoutSeconds
         target.writeTimeoutSeconds = writeTimeoutSeconds
+        target.jsonCodec = jsonCodec
         target.hooksBlock = hooksBlock
         target.localToolRegistry.copyFrom(localToolRegistry)
         target.mcpRegistry.copyFrom(mcpRegistry)

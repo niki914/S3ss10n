@@ -1,11 +1,12 @@
 package com.niki914.s3ss10n.protocol.openai
 
 import android.util.Log
-import com.google.gson.Gson
 import com.niki914.s3ss10n.ChatTurn
 import com.niki914.s3ss10n.SessionConfig
 import com.niki914.s3ss10n.SessionEvent
 import com.niki914.s3ss10n.ToolCallSpec
+import com.niki914.s3ss10n.json.GsonJsonCodec
+import com.niki914.s3ss10n.json.JsonCodec
 import com.niki914.s3ss10n.protocol.ChatProtocol
 import com.niki914.s3ss10n.protocol.ProtocolEvent
 import kotlinx.coroutines.flow.Flow
@@ -13,8 +14,12 @@ import kotlinx.coroutines.flow.flow
 
 // TODO(T7): replace try/catch with xTry
 class OpenAIProtocol(
-    private val gson: Gson = Gson()
+    private val codec: JsonCodec = GsonJsonCodec()
 ) : ChatProtocol {
+
+    override fun withCodec(codec: JsonCodec): ChatProtocol {
+        return OpenAIProtocol(codec)
+    }
 
     override fun buildRequestBody(
         snapshot: SessionConfig,
@@ -31,7 +36,7 @@ class OpenAIProtocol(
         pendingUserInput
             ?.takeIf { it.isNotBlank() }
             ?.let { messages += OpenAIMessage.User(it) }
-        return gson.toJson(
+        return codec.encode(
             OpenAIChatRequestBody(
                 model = snapshot.model,
                 messages = messages,
@@ -42,13 +47,12 @@ class OpenAIProtocol(
     }
 
     override fun parseStream(rawSseLines: Flow<String>): Flow<ProtocolEvent> = flow {
-        val toolCallAccumulator = ToolCallAccumulator(gson)
+        val toolCallAccumulator = ToolCallAccumulator(codec)
         rawSseLines.collect { line ->
-            val frame = try {
-                gson.fromJson(line, OpenAIChatResponseFrame::class.java)
-            } catch (t: Throwable) {
-                Log.e("qwerqwer", "OpenAIProtocol.parseStream failed", t)
-                emit(ProtocolEvent.Error(t, SessionEvent.Stage.Parse))
+            val frame = codec.decode(line, OpenAIChatResponseFrame::class.java)
+            if (frame == null) {
+                Log.e("qwerqwer", "OpenAIProtocol.parseStream failed to decode frame")
+                emit(ProtocolEvent.Error(RuntimeException("Failed to decode SSE frame"), SessionEvent.Stage.Parse))
                 return@collect
             }
 
@@ -56,7 +60,7 @@ class OpenAIProtocol(
             delta.content
                 ?.takeIf { it.isNotEmpty() }
                 ?.let { emit(ProtocolEvent.TextDelta(it)) }
-            delta.toolCalls.orEmpty().forEach { toolCallDelta ->
+            delta.tool_calls.orEmpty().forEach { toolCallDelta ->
                 toolCallDelta ?: return@forEach
                 val ready = toolCallAccumulator.push(toolCallDelta) ?: return@forEach
                 emit(
@@ -89,10 +93,10 @@ class OpenAIProtocol(
             is ChatTurn.User -> OpenAIMessage.User(content)
             is ChatTurn.Assistant -> OpenAIMessage.Assistant(
                 content = content.ifEmpty { null },
-                toolCalls = toolCalls.map { it.toOpenAIToolCall() }.ifEmpty { null }
+                tool_calls = toolCalls.map { it.toOpenAIToolCall() }.ifEmpty { null }
             )
             is ChatTurn.ToolResult -> OpenAIMessage.Tool(
-                toolCallId = callId,
+                tool_call_id = callId,
                 name = toolName,
                 content = resultJson
             )
@@ -112,7 +116,7 @@ class OpenAIProtocol(
 }
 
 private class ToolCallAccumulator(
-    private val gson: Gson
+    private val codec: JsonCodec
 ) {
     private var currentActiveToolCall: PendingToolCall? = null
 
@@ -148,12 +152,7 @@ private class ToolCallAccumulator(
     }
 
     private fun isJson(content: String): Boolean {
-        return try {
-            gson.fromJson(content, Any::class.java)
-            true
-        } catch (_: Throwable) {
-            false
-        }
+        return codec.decodeMap(content) != null
     }
 
     private data class PendingToolCall(

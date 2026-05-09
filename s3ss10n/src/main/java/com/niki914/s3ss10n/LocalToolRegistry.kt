@@ -1,5 +1,7 @@
 package com.niki914.s3ss10n
 
+import com.niki914.s3ss10n.json.GsonJsonCodec
+import com.niki914.s3ss10n.json.JsonCodec
 import com.niki914.s3ss10n.protocol.openai.FunctionParameters
 import com.niki914.s3ss10n.protocol.openai.FunctionTool
 import com.niki914.s3ss10n.protocol.openai.PropertyDefinition
@@ -85,12 +87,14 @@ data class LocalToolConfig(
 }
 
 interface LocalToolRegistry {
+    var codec: JsonCodec
     fun add(name: String, block: LocalToolConfig.() -> Unit)
     fun replace(name: String, block: LocalToolConfig.() -> Unit)
     fun remove(name: String)
 }
 
 internal class LocalToolRegistryImpl : LocalToolRegistry {
+    override var codec: JsonCodec = GsonJsonCodec()
     private val _tools = mutableMapOf<String, LocalToolConfig>()
 
     val tools: Map<String, LocalToolConfig> get() = _tools.toMap()
@@ -111,6 +115,7 @@ internal class LocalToolRegistryImpl : LocalToolRegistry {
         _tools.map { (name, config) -> config.toToolDefinition(name) }
 
     internal fun copyFrom(other: LocalToolRegistryImpl) {
+        codec = other.codec
         _tools.clear()
         other._tools.forEach { (k, v) ->
             val newConfig = LocalToolConfig(v.description, v.rawInputSchemaJson)

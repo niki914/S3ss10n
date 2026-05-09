@@ -23,8 +23,13 @@ interface Session {
             builder: SessionConfig.Builder.() -> Unit
         ): Session {
             SessionProtocols.ensureInitialized()
-            val protocol = ProtocolRegistry.resolve(protocolClass)
             val config = SessionConfig.Builder().apply(builder).build()
+            
+            var protocol = ProtocolRegistry.resolve(protocolClass)
+            if (config.jsonCodec != null) {
+                protocol = protocol.withCodec(config.jsonCodec!!)
+            }
+            
             return ChatSession(initialConfig = config, protocol = protocol)
         }
 

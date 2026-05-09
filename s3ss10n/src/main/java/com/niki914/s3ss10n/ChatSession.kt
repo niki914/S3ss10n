@@ -36,6 +36,11 @@ class ChatSession internal constructor(
         handleToolCall(toolCall, ctx)
     }
 
+    init {
+        val codec = initialConfig.jsonCodec ?: com.niki914.s3ss10n.json.GsonJsonCodec()
+        initialConfig.localToolRegistry.codec = codec
+    }
+
     private class RoundContext(
         val configSnapshot: SessionConfig,
         val onEvent: (SessionEvent) -> Unit,
@@ -297,7 +302,6 @@ class ChatSession internal constructor(
     private fun classifyStage(t: Throwable): SessionEvent.Stage {
         return when (t) {
             is ConfigInvalidException -> SessionEvent.Stage.Session
-            is com.google.gson.JsonSyntaxException,
             is IllegalStateException -> SessionEvent.Stage.Parse
             else -> SessionEvent.Stage.Transport
         }
