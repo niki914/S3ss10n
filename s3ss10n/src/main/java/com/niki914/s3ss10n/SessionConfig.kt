@@ -1,7 +1,7 @@
 package com.niki914.s3ss10n
 
 import com.niki914.s3ss10n.json.JsonCodec
-import com.niki914.s3ss10n.protocol.openai.ToolDefinition
+import com.niki914.s3ss10n.net.HttpTimeouts
 
 open class SessionConfig {
     var endpoint: String = ""
@@ -46,10 +46,33 @@ open class SessionConfig {
         _appParams.apply(block)
     }
 
-    internal fun buildToolDefinitions(): List<ToolDefinition> =
-        localToolRegistry.toToolDefinitions()
+    internal fun buildToolCatalog(codec: JsonCodec): ToolCatalog =
+        ToolCatalog(
+            descriptors = localToolRegistry.toToolDescriptors(codec) +
+                mcpRegistry.toToolDescriptors(codec)
+        )
 
     internal fun appParamsSnapshot(): Map<String, Any?> = _appParams.toMap()
+
+    internal fun toRoundSnapshot(codec: JsonCodec): SessionSnapshot {
+        return SessionSnapshot(
+            endpoint = endpoint,
+            apiKey = apiKey,
+            model = model,
+            systemPrompt = systemPrompt,
+            temperature = temperature,
+            timeouts = HttpTimeouts(
+                connectMs = connectTimeoutSeconds * 1000,
+                readMs = readTimeoutSeconds * 1000,
+                writeMs = writeTimeoutSeconds * 1000
+            ),
+            hooksBlock = hooksBlock,
+            appParams = appParamsSnapshot(),
+            tools = buildToolCatalog(codec),
+            mcpServers = mcpRegistry.servers.mapValues { (_, server) -> server.deepCopy() },
+            jsonCodec = codec
+        )
+    }
 
     internal fun snapshot(): SessionConfig {
         val newConfig = SessionConfig()

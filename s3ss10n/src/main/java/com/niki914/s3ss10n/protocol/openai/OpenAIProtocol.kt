@@ -1,9 +1,10 @@
 package com.niki914.s3ss10n.protocol.openai
 
 import com.niki914.s3ss10n.ChatTurn
-import com.niki914.s3ss10n.SessionConfig
 import com.niki914.s3ss10n.SessionEvent
+import com.niki914.s3ss10n.SessionSnapshot
 import com.niki914.s3ss10n.ToolCallSpec
+import com.niki914.s3ss10n.ToolDescriptor
 import com.niki914.s3ss10n.json.GsonJsonCodec
 import com.niki914.s3ss10n.json.JsonCodec
 import com.niki914.s3ss10n.net.HttpRequest
@@ -22,7 +23,7 @@ class OpenAIProtocol(
     }
 
     override fun buildRequest(
-        snapshot: SessionConfig,
+        snapshot: SessionSnapshot,
         history: List<ChatTurn>,
         pendingUserInput: String?
     ): HttpRequest {
@@ -40,7 +41,7 @@ class OpenAIProtocol(
             OpenAIChatRequestBody(
                 model = snapshot.model,
                 messages = messages,
-                tools = snapshot.buildToolDefinitions().ifEmpty { null },
+                tools = snapshot.tools.descriptors.map { it.toToolDefinition() }.ifEmpty { null },
                 temperature = snapshot.temperature
             )
         )
@@ -52,11 +53,7 @@ class OpenAIProtocol(
                 "Content-Type" to "application/json"
             ),
             body = bodyStr.toByteArray(Charsets.UTF_8),
-            timeoutMs = com.niki914.s3ss10n.net.HttpTimeouts(
-                connectMs = snapshot.connectTimeoutSeconds * 1000,
-                readMs = snapshot.readTimeoutSeconds * 1000,
-                writeMs = snapshot.writeTimeoutSeconds * 1000
-            ),
+            timeoutMs = snapshot.timeouts,
             isStreaming = true
         )
     }
@@ -129,6 +126,16 @@ class OpenAIProtocol(
             function = FunctionCall(
                 name = toolName,
                 arguments = argumentsJson
+            )
+        )
+    }
+
+    private fun ToolDescriptor.toToolDefinition(): ToolDefinition {
+        return ToolDefinition(
+            function = FunctionTool(
+                name = name,
+                description = description,
+                parameters = inputSchema
             )
         )
     }

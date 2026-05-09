@@ -2,10 +2,6 @@ package com.niki914.s3ss10n
 
 import com.niki914.s3ss10n.json.GsonJsonCodec
 import com.niki914.s3ss10n.json.JsonCodec
-import com.niki914.s3ss10n.protocol.openai.FunctionParameters
-import com.niki914.s3ss10n.protocol.openai.FunctionTool
-import com.niki914.s3ss10n.protocol.openai.PropertyDefinition
-import com.niki914.s3ss10n.protocol.openai.ToolDefinition
 
 enum class ToolValueType(val jsonType: String) {
     String("string"),
@@ -65,24 +61,47 @@ data class LocalToolConfig(
         if (prop.required) requiredNames.add(name)
     }
 
-    internal fun toToolDefinition(toolName: String): ToolDefinition {
-        val propDefs = properties.mapValues { (_, prop) ->
-            PropertyDefinition(
-                type = prop.type.jsonType,
-                description = prop.description
-            )
-        }
-        return ToolDefinition(
-            function = FunctionTool(
-                name = toolName,
-                description = description,
-                parameters = FunctionParameters(
-                    type = "object",
-                    properties = propDefs,
-                    required = requiredNames.ifEmpty { null }
-                )
-            )
+    internal fun toToolDescriptor(
+        toolName: String,
+        kind: ToolCallKind,
+        codec: JsonCodec
+    ): ToolDescriptor {
+        return ToolDescriptor(
+            name = toolName,
+            description = description,
+            inputSchema = buildInputSchema(toolName, codec),
+            kind = kind
         )
+    }
+
+    internal fun deepCopy(): LocalToolConfig {
+        val newConfig = LocalToolConfig(description, rawInputSchemaJson)
+        properties.forEach { (name, prop) -> newConfig.properties[name] = prop.copy() }
+        newConfig.requiredNames.addAll(requiredNames)
+        return newConfig
+    }
+
+    private fun buildInputSchema(toolName: String, codec: JsonCodec): Map<String, Any?> {
+        rawInputSchemaJson?.let { raw ->
+            return codec.decodeMap(raw)
+                ?: throw IllegalArgumentException("Invalid rawJsonSchema for tool $toolName")
+        }
+        val propDefs = properties.mapValues { (_, prop) ->
+            buildMap<String, Any?> {
+                put("type", prop.type.jsonType)
+                put("description", prop.description)
+                if (prop.enumValues.isNotEmpty()) {
+                    put("enum", prop.enumValues)
+                }
+            }
+        }
+        return buildMap {
+            put("type", "object")
+            put("properties", propDefs)
+            if (requiredNames.isNotEmpty()) {
+                put("required", requiredNames.distinct())
+            }
+        }
     }
 }
 
@@ -111,17 +130,16 @@ internal class LocalToolRegistryImpl : LocalToolRegistry {
         _tools.remove(name)
     }
 
-    fun toToolDefinitions(): List<ToolDefinition> =
-        _tools.map { (name, config) -> config.toToolDefinition(name) }
+    fun toToolDescriptors(codec: JsonCodec): List<ToolDescriptor> =
+        _tools.map { (name, config) ->
+            config.toToolDescriptor(name, ToolCallKind.Local, codec)
+        }
 
     internal fun copyFrom(other: LocalToolRegistryImpl) {
         codec = other.codec
         _tools.clear()
         other._tools.forEach { (k, v) ->
-            val newConfig = LocalToolConfig(v.description, v.rawInputSchemaJson)
-            newConfig.properties.putAll(v.properties)
-            newConfig.requiredNames.addAll(v.requiredNames)
-            _tools[k] = newConfig
+            _tools[k] = v.deepCopy()
         }
     }
 }

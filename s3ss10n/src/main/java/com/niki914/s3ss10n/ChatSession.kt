@@ -1,6 +1,7 @@
 package com.niki914.s3ss10n
 
 import com.niki914.s3ss10n.json.GsonJsonCodec
+import com.niki914.s3ss10n.json.JsonCodec
 import com.niki914.s3ss10n.net.HttpEngine
 import com.niki914.s3ss10n.net.OkHttpEngine
 import com.niki914.s3ss10n.protocol.ChatProtocol
@@ -26,6 +27,8 @@ class ChatSession internal constructor(
 
     private val configRef = AtomicReference(initialConfig)
     private val engine: HttpEngine = initialConfig.httpEngine ?: OkHttpEngine()
+    private val jsonCodec: JsonCodec = initialConfig.jsonCodec ?: GsonJsonCodec()
+    private val mcpClient: McpClient = HttpMcpClient(engine = engine, codec = jsonCodec)
     private val scope = CoroutineScope(SupervisorJob())
     private var currJob: Job? = null
     private val chatMutex = Mutex()
@@ -35,12 +38,11 @@ class ChatSession internal constructor(
     }
 
     init {
-        val codec = initialConfig.jsonCodec ?: GsonJsonCodec()
-        initialConfig.localToolRegistry.codec = codec
+        initialConfig.localToolRegistry.codec = jsonCodec
     }
 
     private class RoundContext(
-        val configSnapshot: SessionConfig,
+        val configSnapshot: SessionSnapshot,
         val onEvent: (SessionEvent) -> Unit,
         val initialInput: String,
         val textAccumulator: StringBuilder = StringBuilder(),
@@ -48,13 +50,24 @@ class ChatSession internal constructor(
     )
 
     override suspend fun send(text: String, onEvent: (SessionEvent) -> Unit) {
-        val ctx = RoundContext(configRef.get().snapshot(), onEvent, text)
+        val ctx = RoundContext(configRef.get().toRoundSnapshot(jsonCodec), onEvent, text)
         runRound(ctx, text).join()
     }
 
     override fun update(block: SessionConfig.Builder.() -> Unit) {
         configRef.updateAndGet { current ->
-            current.toBuilder().apply(block).build()
+            val baseCodec = current.jsonCodec
+            val baseEngine = current.httpEngine
+            val updated = current.toBuilder().apply(block).build()
+            if (updated.jsonCodec !== baseCodec) {
+                xLog("X", "update ignored open-only field: jsonCodec")
+                updated.jsonCodec = baseCodec
+            }
+            if (updated.httpEngine !== baseEngine) {
+                xLog("X", "update ignored open-only field: httpEngine")
+                updated.httpEngine = baseEngine
+            }
+            updated
         }
     }
 
@@ -191,6 +204,25 @@ class ChatSession internal constructor(
     }
 
     private suspend fun handleToolCall(toolCall: ToolCallSpec, ctx: RoundContext): String {
+        if (ctx.configSnapshot.tools.find(toolCall.toolName) == null) {
+            val resultJson = """{"error":"Unknown tool '${toolCall.toolName}'"}"""
+            ctx.onEvent(
+                SessionEvent.ToolFailed(
+                    callId = toolCall.callId,
+                    toolName = toolCall.toolName,
+                    kind = ToolCallKind.Local,
+                    message = "Unknown tool '${toolCall.toolName}'",
+                    resultJson = resultJson
+                )
+            )
+            ctx.onEvent(
+                SessionEvent.Error(
+                    stage = SessionEvent.Stage.Tool,
+                    message = "Unknown tool '${toolCall.toolName}'"
+                )
+            )
+            return resultJson
+        }
         val request = buildToolCallRequest(toolCall, ctx.configSnapshot)
         ctx.onEvent(
             SessionEvent.ToolRunning(
@@ -201,7 +233,7 @@ class ChatSession internal constructor(
         )
 
         val hooks = ctx.configSnapshot.hooksBlock
-        if (hooks == null) {
+        if (hooks == null && request is LocalToolCallRequest) {
             ctx.onEvent(
                 SessionEvent.ToolFailed(
                     callId = request.id,
@@ -239,7 +271,11 @@ class ChatSession internal constructor(
             )
             request.error(t.message ?: "hooks threw exception")
         }) {
-            request.hooks()
+            if (hooks != null) {
+                request.hooks()
+            } else {
+                request.delegate()
+            }
         }
 
         when (val outcome = when (request) {
@@ -267,6 +303,12 @@ class ChatSession internal constructor(
                         resultJson = outcome.resultJson
                     )
                 )
+                ctx.onEvent(
+                    SessionEvent.Error(
+                        stage = SessionEvent.Stage.Tool,
+                        message = outcome.errorMessage
+                    )
+                )
             }
 
             null -> {
@@ -284,14 +326,27 @@ class ChatSession internal constructor(
         return resultJson
     }
 
-    private fun buildToolCallRequest(toolCall: ToolCallSpec, snap: SessionConfig): ToolCallRequest {
-        return LocalToolCallRequest(
-            toolCall = toolCall,
-            appParams = snap.appParamsSnapshot()
-        )
+    private fun buildToolCallRequest(toolCall: ToolCallSpec, snap: SessionSnapshot): ToolCallRequest {
+        val descriptor = snap.tools.find(toolCall.toolName)
+        return when (val kind = descriptor?.kind) {
+            ToolCallKind.Local -> LocalToolCallRequest(
+                toolCall = toolCall,
+                appParams = snap.appParams
+            )
+
+            is ToolCallKind.Mcp -> McpToolCallRequest(
+                toolCall = toolCall,
+                serverName = kind.serverName,
+                appParams = snap.appParams,
+                server = snap.mcpServer(kind.serverName),
+                mcpClient = mcpClient
+            )
+
+            null -> error("Unknown tool '${toolCall.toolName}'")
+        }
     }
 
-    private fun ensureConfigValid(snapshot: SessionConfig) {
+    private fun ensureConfigValid(snapshot: SessionSnapshot) {
         if (!snapshot.endpoint.startsWith("http://") && !snapshot.endpoint.startsWith("https://")) {
             throw ConfigInvalidException()
         }
@@ -303,6 +358,7 @@ class ChatSession internal constructor(
     private fun classifyStage(t: Throwable): SessionEvent.Stage {
         return when (t) {
             is ConfigInvalidException -> SessionEvent.Stage.Session
+            is IllegalArgumentException -> SessionEvent.Stage.Session
             is IllegalStateException -> SessionEvent.Stage.Parse
             else -> SessionEvent.Stage.Transport
         }

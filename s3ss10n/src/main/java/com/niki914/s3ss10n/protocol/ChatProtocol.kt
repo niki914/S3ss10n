@@ -1,7 +1,7 @@
 package com.niki914.s3ss10n.protocol
 
 import com.niki914.s3ss10n.ChatTurn
-import com.niki914.s3ss10n.SessionConfig
+import com.niki914.s3ss10n.SessionSnapshot
 import com.niki914.s3ss10n.json.JsonCodec
 import com.niki914.s3ss10n.net.HttpRequest
 import kotlinx.coroutines.flow.Flow
@@ -17,7 +17,7 @@ interface ChatProtocol {
      * tool call delta 的拼接由协议实现自行负责。
      */
     fun buildRequest(
-        snapshot: SessionConfig,
+        snapshot: SessionSnapshot,
         history: List<ChatTurn>,
         pendingUserInput: String?
     ): HttpRequest

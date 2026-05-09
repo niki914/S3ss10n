@@ -47,20 +47,7 @@ data class ToolDefinition(
 data class FunctionTool(
     val name: String,
     val description: String,
-    val parameters: FunctionParameters
-)
-
-@Keep
-data class FunctionParameters(
-    val type: String,
-    val properties: Map<String, PropertyDefinition>,
-    val required: List<String>? = null
-)
-
-@Keep
-data class PropertyDefinition(
-    val type: String,
-    val description: String
+    val parameters: Map<String, Any?>
 )
 
 @Keep

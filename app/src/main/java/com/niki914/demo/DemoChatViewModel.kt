@@ -76,7 +76,7 @@ class ChatViewModel
                                 }
                             }
                             is ToolCallKind.Mcp -> {
-                                error("MCP not supported yet")
+                                delegate()
                             }
                         }
                     }
@@ -88,6 +88,12 @@ class ChatViewModel
                                 description = "The message you'd like to tell the user."
                                 required = true
                             }
+                        }
+                    }
+
+                    mcp {
+                        add("local_ide") {
+                            http { url = "http://127.0.0.1:51337/mcp" }
                         }
                     }
                 }

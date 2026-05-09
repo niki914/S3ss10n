@@ -60,7 +60,9 @@ internal class LocalToolCallRequest(
 internal class McpToolCallRequest(
     private val toolCall: ToolCallSpec,
     private val serverName: String,
-    override val appParams: Map<String, Any?>
+    override val appParams: Map<String, Any?>,
+    private val server: McpServerConfig?,
+    private val mcpClient: McpClient
 ) : ToolCallRequest {
     override val id: String get() = toolCall.callId
     override val name: String get() = toolCall.toolName
@@ -70,7 +72,12 @@ internal class McpToolCallRequest(
     internal var lastOutcome: ToolCallOutcome? = null
 
     override suspend fun delegate(): String {
-        return error("MCP not implemented yet")
+        val currentServer = server ?: return error("MCP server '$serverName' is not configured")
+        return try {
+            ok(mcpClient.call(currentServer, name, argumentsJson))
+        } catch (t: Throwable) {
+            error(t.message ?: "MCP call failed")
+        }
     }
 
     override fun ok(contentJson: String): String {

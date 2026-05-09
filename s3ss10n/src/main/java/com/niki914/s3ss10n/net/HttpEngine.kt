@@ -9,6 +9,11 @@ interface HttpEngine {
     fun stream(request: HttpRequest): Flow<String>
 
     /**
+     * 发起一次非流式请求，返回原始响应体。
+     */
+    suspend fun unary(request: HttpRequest): String
+
+    /**
      * 释放底层资源（连接池、线程池等）；幂等
      */
     fun close()
