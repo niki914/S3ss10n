@@ -1,13 +1,13 @@
 package com.niki914.s3ss10n.smoketest
 
 import com.niki914.s3ss10n.Session
-
+import com.niki914.s3ss10n.SessionProtocols
 import kotlinx.coroutines.runBlocking
 
 fun main10() = runBlocking {
     println("=== SessionUpdate Smoke Test ===")
 
-    val session = Session.open {
+    val session = Session.open<SessionProtocols.OpenAI> {
         endpoint = "old_endpoint"
         model = "old_model"
     }

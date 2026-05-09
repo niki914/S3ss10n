@@ -1,10 +1,7 @@
 package com.niki914.s3ss10n.chat
 
-import com.niki914.s3ss10n.chat.protocol.ChatApiRequestBody
 import com.niki914.s3ss10n.net.sse.SseClient
-import com.niki914.s3ss10n.util.gson
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
@@ -18,7 +15,6 @@ internal class ChatService(
     private val client: OkHttpClient
 ) {
 
-    private val transformLayer = SseToChatTransformLayer()
     private val sseClient = SseClient()
 
     fun preConnect() = runCatching {
@@ -34,8 +30,7 @@ internal class ChatService(
         )
     }
 
-    fun newChat(requestBody: ChatApiRequestBody): Flow<ChatEvent> = flow {
-        val requestBodyJson = gson.toJson(requestBody)
+    fun newChat(requestBodyJson: String): Flow<String> {
         val body = requestBodyJson.toRequestBody("application/json".toMediaType())
 
         val request = initRequest()
@@ -43,13 +38,7 @@ internal class ChatService(
             .build()
 
         val call = client.newCall(request)
-        sseClient.execute<ChatEvent>(
-            call = call,
-            collector = this,
-            onEvent = { event ->
-                transformLayer.transformEvent(event)
-            }
-        )
+        return sseClient.executeDataLines(call)
     }
 
     private fun initRequest(): Request.Builder {

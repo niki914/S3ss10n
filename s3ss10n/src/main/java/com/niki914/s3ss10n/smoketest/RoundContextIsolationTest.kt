@@ -2,6 +2,7 @@ package com.niki914.s3ss10n.smoketest
 
 import com.niki914.s3ss10n.Session
 import com.niki914.s3ss10n.SessionEvent
+import com.niki914.s3ss10n.SessionProtocols
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -9,7 +10,7 @@ import kotlinx.coroutines.runBlocking
 fun main11() = runBlocking {
     println("=== RoundContextIsolationTest ===")
 
-    val session = Session.open {
+    val session = Session.open<SessionProtocols.OpenAI> {
         endpoint ="https://api.deepseek.com/v1/chat/completions"  
         apiKey = "sk-1307bc01b96c49c0909c7bd0a4dacf6d"
         model = "deepseek-v4-flash"

@@ -3,6 +3,7 @@ package com.niki914.s3ss10n.smoketest
 import com.niki914.s3ss10n.Session
 import com.niki914.s3ss10n.SessionConfig
 import com.niki914.s3ss10n.SessionEvent
+import com.niki914.s3ss10n.SessionProtocols
 import kotlinx.coroutines.runBlocking
 
 fun main8() = runBlocking {
@@ -11,7 +12,7 @@ fun main8() = runBlocking {
 
     // Test 1: Session creation with all DSL features
     println("--- Test 1: Session.open with full DSL ---")
-    val session = Session.Companion.open {
+    val session = Session.open<SessionProtocols.OpenAI> {
         endpoint = "https://api.openai.com/v1/chat/completions"
         apiKey = "sk-test-key"
         model = "gpt-4.1-mini"

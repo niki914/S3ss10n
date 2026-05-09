@@ -2,13 +2,14 @@ package com.niki914.s3ss10n.smoketest
 
 import com.niki914.s3ss10n.Session
 import com.niki914.s3ss10n.SessionEvent
+import com.niki914.s3ss10n.SessionProtocols
 import kotlinx.coroutines.runBlocking
 
 fun main7() = runBlocking {
     println("=== Session Smoke Test (via ChatSession) ===")
 
     // Create Session with full config
-    val session = Session.Companion.open {
+    val session = Session.open<SessionProtocols.OpenAI> {
         endpoint = "https://api.openai.com/v1/chat/completions"
         apiKey = "sk-test"
         model = "gpt-4.1-mini"
@@ -55,6 +56,9 @@ fun main7() = runBlocking {
             is SessionEvent.Error -> println("  -> Error[${event.stage}]: ${event.message}")
         }
     }
+
+    val history = session.getHistory()
+    println("History size: ${history.size}")
 
     // Test resetConversation
     session.resetConversation()

@@ -1,9 +1,9 @@
 package com.niki914.s3ss10n
 
-import com.niki914.s3ss10n.chat.protocol.FunctionParameters
-import com.niki914.s3ss10n.chat.protocol.FunctionTool
-import com.niki914.s3ss10n.chat.protocol.PropertyDefinition
-import com.niki914.s3ss10n.chat.protocol.ToolDefinition
+import com.niki914.s3ss10n.protocol.openai.FunctionParameters
+import com.niki914.s3ss10n.protocol.openai.FunctionTool
+import com.niki914.s3ss10n.protocol.openai.PropertyDefinition
+import com.niki914.s3ss10n.protocol.openai.ToolDefinition
 
 enum class ToolValueType(val jsonType: String) {
     String("string"),

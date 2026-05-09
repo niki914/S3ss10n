@@ -51,7 +51,6 @@ import com.niki914.demo.ChatEffect
 import com.niki914.demo.ChatIntent
 import com.niki914.demo.ChatViewModel
 import com.niki914.demo.DemoTurn
-import com.niki914.s3ss10n.chat.protocol.beans.Message
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach

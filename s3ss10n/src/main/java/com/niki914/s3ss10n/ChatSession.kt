@@ -1,54 +1,36 @@
 package com.niki914.s3ss10n
 
-import com.niki914.s3ss10n.chat.AIContent
-import com.niki914.s3ss10n.chat.ChatEvent
+import android.util.Log
 import com.niki914.s3ss10n.chat.ChatService
-import com.niki914.s3ss10n.chat.protocol.ChatApiRequestBody
-import com.niki914.s3ss10n.chat.protocol.ToolCall
-import com.niki914.s3ss10n.chat.protocol.ToolDefinition
-import com.niki914.s3ss10n.chat.protocol.beans.Message
-import com.niki914.s3ss10n.chat.protocol.beans.system
-import com.niki914.s3ss10n.chat.protocol.beans.user
 import com.niki914.s3ss10n.net.OkhttpClientManager
+import com.niki914.s3ss10n.protocol.ChatProtocol
+import com.niki914.s3ss10n.protocol.ProtocolEvent
 import com.niki914.s3ss10n.util.HistoryKeeper
 import com.niki914.s3ss10n.util.ToolCallWaiter
-import com.zephyr.log.logE
-import com.zephyr.provider.TAG
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-class ConfigInvalidException() :
-    IllegalAccessException("Config is invalid. Set BaseUrl and Model first!")
+class ConfigInvalidException :
+    IllegalAccessException("Config is invalid. Set endpoint and model first!")
 
-/**
- * A session-level streaming chat wrapper.
- *
- * It keeps the conversation history, streams assistant output, coordinates tool calling,
- * and emits [SessionEvent] directly to the caller's onEvent lambda.
- *
- * Implements [Session] to provide the public API for chat interactions.
- */
+// TODO(T7): replace try/catch with xTry
 class ChatSession internal constructor(
-    initialConfig: SessionConfig
+    initialConfig: SessionConfig,
+    private val protocol: ChatProtocol
 ) : Session {
 
     private val configRef = AtomicReference(initialConfig)
-
     private val clientManager = OkhttpClientManager { configRef.get() }
     private val service by lazy { ChatService(clientManager.okHttpClient) }
-
     private val scope = CoroutineScope(SupervisorJob())
     private var currJob: Job? = null
     private val chatMutex = Mutex()
-
     private val historyKeeper = HistoryKeeper()
     private val toolCallWaiter = ToolCallWaiter<RoundContext>(scope) { toolCall, ctx ->
         handleToolCall(toolCall, ctx)
@@ -58,79 +40,41 @@ class ChatSession internal constructor(
         val configSnapshot: SessionConfig,
         val onEvent: (SessionEvent) -> Unit,
         val initialInput: String,
-        val textAccumulator: StringBuilder = StringBuilder()
+        val textAccumulator: StringBuilder = StringBuilder(),
+        var hasStarted: Boolean = false
     )
-
-    // --- Session interface implementation ---
 
     override suspend fun send(text: String, onEvent: (SessionEvent) -> Unit) {
         val ctx = RoundContext(configRef.get().snapshot(), onEvent, text)
-        runRound(ctx, userInput = text)
+        runRound(ctx, text).join()
     }
 
-    override fun update(block: SessionConfig.() -> Unit) {
+    override fun update(block: SessionConfig.Builder.() -> Unit) {
         configRef.updateAndGet { current ->
-            current.snapshot().apply(block)
+            current.toBuilder().apply(block).build()
         }
     }
 
+    override suspend fun getHistory(): List<ChatTurn> {
+        return historyKeeper.snapshot().filterNot { it is ChatTurn.System }
+    }
+
     override suspend fun resetConversation() {
-        reset()
+        cleanUpCurrWork()
+        historyKeeper.clear()
     }
 
     override suspend fun close() {
         scope.cancel()
     }
 
-    // --- Internal methods ---
-
-    private fun isConfigValid(snap: SessionConfig): Boolean {
-        return snap.endpoint.isHTTPProtocol() && snap.model.isNotBlank()
-    }
-
-    private fun String.isHTTPProtocol(): Boolean {
-        return startsWith("http://") || startsWith("https://")
-    }
-
-    private fun streamRequest(snap: SessionConfig, messages: List<Message>): Flow<ChatEvent> {
-        if (!isConfigValid(snap)) {
-            val cause = ConfigInvalidException()
-            return flowOf(
-                ChatEvent.Start,
-                ChatEvent.Error(
-                    msg = cause.message!!,
-                    cause = cause
-                ),
-                ChatEvent.Complete(
-                    isSuccess = false,
-                    cause = cause
-                )
-            )
+    private fun runRound(ctx: RoundContext, userInput: String?) = scope.launch {
+        chatMutex.withLock {
+            cleanUpCurrWork()
+            currJob = launch {
+                doRound(ctx, userInput)
+            }
         }
-
-        val sysPrompt = snap.systemPrompt
-        val prefix = if (!sysPrompt.isNullOrBlank()) {
-            system(sysPrompt)
-        } else null
-
-        val allMessages = listOfNotNull(prefix) + messages
-
-        return service.newChat(
-            requestBody = ChatApiRequestBody(
-                model = snap.model,
-                messages = allMessages,
-                tools = snap.buildToolDefinitions().ifEmpty { null },
-                temperature = snap.temperature
-            )
-        )
-    }
-
-    /**
-     * Cancels the current round and clears all history.
-     */
-    private suspend fun reset() {
-        cleanUpCurrWork()
-        historyKeeper.clear()
     }
 
     private suspend fun cleanUpCurrWork() {
@@ -139,144 +83,109 @@ class ChatSession internal constructor(
         toolCallWaiter.cancelAndClear(join = true)
     }
 
-    /**
-     * Sends a user message and starts a new streaming round.
-     */
-    private fun runRound(ctx: RoundContext, userInput: String?) = scope.launch {
-        chatMutex.withLock {
-            cleanUpCurrWork()
-            currJob = launch {
-                val msg = userInput?.let { user(it) }
-                doRound(ctx, msg)
+    private suspend fun doRound(ctx: RoundContext, userInput: String?) {
+        try {
+            ensureConfigValid(ctx.configSnapshot)
+            if (!ctx.hasStarted) {
+                ctx.hasStarted = true
+                ctx.onEvent(SessionEvent.RoundStarted(input = ctx.initialInput))
             }
-        }
-    }
 
-    private suspend fun doRound(ctx: RoundContext, message: Message.User?) {
-        message?.let {
-            historyKeeper.addUserMsg(message)
-        }
-
-        streamRequest(
-            snap = ctx.configSnapshot,
-            messages = historyKeeper.getMessages()
-        ).collect { chatEvent ->
-            when (chatEvent) {
-                ChatEvent.Start -> {
-                    historyKeeper.setLatestPairState(
-                        ChatPair.RoundState.Generating
+            val fullText = StringBuilder()
+            val toolCalls = mutableListOf<ToolCallSpec>()
+            protocol.parseStream(
+                service.newChat(
+                    protocol.buildRequestBody(
+                        snapshot = ctx.configSnapshot,
+                        history = historyKeeper.snapshot(),
+                        pendingUserInput = userInput
                     )
-                    logE(TAG, "SESSION: Started")
-                    ctx.onEvent(
-                        SessionEvent.RoundStarted(input = ctx.initialInput)
-                    )
-                }
-
-                is ChatEvent.AI -> {
-                    when (val aIContent = chatEvent.content) {
-                        is AIContent.Else -> {
-                            logE(TAG, "SESSION: Unimplemented case: $aIContent")
-                        }
-
-                        is AIContent.Text -> {
-                            historyKeeper.appendTextToLastAIMsg(aIContent.content)
-                            ctx.textAccumulator.append(aIContent.content)
-                            ctx.onEvent(
-                                SessionEvent.TextDelta(
-                                    delta = aIContent.content,
-                                    fullText = ctx.textAccumulator.toString()
-                                )
-                            )
-                        }
-                    }
-                }
-
-                is ChatEvent.ToolCallIntent -> {
-                    historyKeeper.appendToolCallToLastAIMsg(chatEvent.toolCall)
-                    logE(TAG, "SESSION: Inject tool-call: ${chatEvent.toolCall.function?.name}")
-                    toolCallWaiter.enqueue(chatEvent.toolCall, ctx)
-                }
-
-                is ChatEvent.Error -> {
-                    if (chatEvent.cause is ConfigInvalidException) {
-                        logE(TAG, "SESSION: Config is invalid")
+                )
+            ).collect { event ->
+                when (event) {
+                    is ProtocolEvent.TextDelta -> {
+                        fullText.append(event.text)
+                        ctx.textAccumulator.append(event.text)
                         ctx.onEvent(
-                            SessionEvent.Error(
-                                stage = SessionEvent.Stage.Session,
-                                message = "Config is invalid. Set endpoint and model first."
-                            )
-                        )
-                    } else if (chatEvent.cause is com.google.gson.JsonSyntaxException || chatEvent.cause is java.lang.IllegalStateException) {
-                        logE(TAG, "SESSION: Parse error occurred")
-                        logE(TAG, chatEvent.cause?.stackTraceToString() ?: chatEvent.msg)
-                        ctx.onEvent(
-                            SessionEvent.Error(
-                                stage = SessionEvent.Stage.Parse,
-                                message = chatEvent.msg,
-                                cause = chatEvent.cause
-                            )
-                        )
-                    } else {
-                        logE(TAG, "SESSION: Error occurred")
-                        logE(TAG, chatEvent.cause?.stackTraceToString() ?: chatEvent.msg)
-                        ctx.onEvent(
-                            SessionEvent.Error(
-                                stage = SessionEvent.Stage.Transport,
-                                message = chatEvent.msg,
-                                cause = chatEvent.cause
+                            SessionEvent.TextDelta(
+                                delta = event.text,
+                                fullText = ctx.textAccumulator.toString()
                             )
                         )
                     }
-                }
 
-                is ChatEvent.Complete -> {
-                    val isSuccess = chatEvent.isSuccess
-
-                    historyKeeper.setLatestPairState(
-                        if (isSuccess)
-                            ChatPair.RoundState.Succeeded
-                        else
-                            ChatPair.RoundState.Failed
-                    )
-
-                    if (!toolCallWaiter.isEmpty() && isSuccess) {
-                        logE(TAG, "SESSION: Prepare for tool responding")
-                        responseToolCalls(ctx)
-                    } else {
-                        if (isSuccess) {
-                            ctx.onEvent(
-                                SessionEvent.RoundCompleted(
-                                    fullText = ctx.textAccumulator.toString()
-                                )
-                            )
-                        } else {
-                            ctx.onEvent(
-                                SessionEvent.Error(
-                                    stage = SessionEvent.Stage.Session,
-                                    message = "Round failed",
-                                    cause = chatEvent.cause
-                                )
-                            )
-                        }
+                    is ProtocolEvent.ToolCallReady -> {
+                        val toolCall = ToolCallSpec(
+                            callId = event.callId,
+                            toolName = event.toolName,
+                            argumentsJson = event.argumentsJson
+                        )
+                        toolCalls += toolCall
+                        toolCallWaiter.enqueue(toolCall, ctx)
                     }
+
+                    is ProtocolEvent.Error -> {
+                        ctx.onEvent(
+                            SessionEvent.Error(
+                                stage = event.stage,
+                                message = event.cause.message ?: "Protocol error",
+                                cause = event.cause
+                            )
+                        )
+                    }
+
+                    ProtocolEvent.Completed -> Unit
                 }
             }
+
+            if (userInput != null) {
+                historyKeeper.add(ChatTurn.User(userInput))
+            }
+            historyKeeper.add(
+                ChatTurn.Assistant(
+                    content = fullText.toString(),
+                    toolCalls = toolCalls.toList()
+                )
+            )
+
+            if (!toolCallWaiter.isEmpty()) {
+                responseToolCalls(ctx)
+                return
+            }
+
+            ctx.onEvent(
+                SessionEvent.RoundCompleted(
+                    fullText = ctx.textAccumulator.toString()
+                )
+            )
+        } catch (t: Throwable) {
+            Log.e("qwerqwer", "ChatSession.doRound failed", t)
+            ctx.onEvent(
+                SessionEvent.Error(
+                    stage = classifyStage(t),
+                    message = t.message ?: "Round failed",
+                    cause = t
+                )
+            )
         }
     }
 
     private suspend fun responseToolCalls(ctx: RoundContext) {
         val results = toolCallWaiter.awaitAll()
-        historyKeeper.addToolResults(results)
+        results.forEach { (toolCall, resultJson) ->
+            historyKeeper.add(
+                protocol.encodeToolResult(
+                    callId = toolCall.callId,
+                    toolName = toolCall.toolName,
+                    resultJson = resultJson
+                )
+            )
+        }
         doRound(ctx, null)
     }
 
-    /**
-     * Handles a tool call: builds a [ToolCallRequest], dispatches through hooks,
-     * and emits [SessionEvent.ToolRunning]/[SessionEvent.ToolSucceeded]/[SessionEvent.ToolFailed].
-     */
-    private suspend fun handleToolCall(toolCall: ToolCall, ctx: RoundContext): Message.Tool {
+    private suspend fun handleToolCall(toolCall: ToolCallSpec, ctx: RoundContext): String {
         val request = buildToolCallRequest(toolCall, ctx.configSnapshot)
-
         ctx.onEvent(
             SessionEvent.ToolRunning(
                 callId = request.id,
@@ -286,70 +195,7 @@ class ChatSession internal constructor(
         )
 
         val hooks = ctx.configSnapshot.hooksBlock
-        return if (hooks != null) {
-            val result = try {
-                request.hooks()
-            } catch (t: Throwable) {
-                ctx.onEvent(
-                    SessionEvent.ToolFailed(
-                        callId = request.id,
-                        toolName = request.name,
-                        kind = request.kind,
-                        message = t.message ?: "hooks threw exception",
-                        resultJson = null
-                    )
-                )
-                ctx.onEvent(
-                    SessionEvent.Error(
-                        stage = SessionEvent.Stage.Tool,
-                        message = t.message ?: "hooks threw exception",
-                        cause = t
-                    )
-                )
-                return request.error(t.message ?: "hooks threw exception")
-            }
-
-            val outcome = when (request) {
-                is LocalToolCallRequest -> request.lastOutcome
-                is McpToolCallRequest -> request.lastOutcome
-            }
-
-            when (outcome) {
-                is ToolCallOutcome.Success -> {
-                    ctx.onEvent(
-                        SessionEvent.ToolSucceeded(
-                            callId = request.id,
-                            toolName = request.name,
-                            kind = request.kind,
-                            resultJson = outcome.resultJson
-                        )
-                    )
-                }
-                is ToolCallOutcome.Failure -> {
-                    ctx.onEvent(
-                        SessionEvent.ToolFailed(
-                            callId = request.id,
-                            toolName = request.name,
-                            kind = request.kind,
-                            message = outcome.errorMessage,
-                            resultJson = outcome.resultJson
-                        )
-                    )
-                }
-                null -> {
-                    ctx.onEvent(
-                        SessionEvent.ToolFailed(
-                            callId = request.id,
-                            toolName = request.name,
-                            kind = request.kind,
-                            message = "No outcome recorded",
-                            resultJson = result.content
-                        )
-                    )
-                }
-            }
-            result
-        } else {
+        if (hooks == null) {
             ctx.onEvent(
                 SessionEvent.ToolFailed(
                     callId = request.id,
@@ -365,14 +211,95 @@ class ChatSession internal constructor(
                     message = "no hooks configured"
                 )
             )
-            request.error("No hooks configured")
+            return request.error("No hooks configured")
         }
+
+        val resultJson = try {
+            request.hooks()
+        } catch (t: Throwable) {
+            ctx.onEvent(
+                SessionEvent.ToolFailed(
+                    callId = request.id,
+                    toolName = request.name,
+                    kind = request.kind,
+                    message = t.message ?: "hooks threw exception",
+                    resultJson = null
+                )
+            )
+            ctx.onEvent(
+                SessionEvent.Error(
+                    stage = SessionEvent.Stage.Tool,
+                    message = t.message ?: "hooks threw exception",
+                    cause = t
+                )
+            )
+            return request.error(t.message ?: "hooks threw exception")
+        }
+
+        when (val outcome = when (request) {
+            is LocalToolCallRequest -> request.lastOutcome
+            is McpToolCallRequest -> request.lastOutcome
+        }) {
+            is ToolCallOutcome.Success -> {
+                ctx.onEvent(
+                    SessionEvent.ToolSucceeded(
+                        callId = request.id,
+                        toolName = request.name,
+                        kind = request.kind,
+                        resultJson = outcome.resultJson
+                    )
+                )
+            }
+
+            is ToolCallOutcome.Failure -> {
+                ctx.onEvent(
+                    SessionEvent.ToolFailed(
+                        callId = request.id,
+                        toolName = request.name,
+                        kind = request.kind,
+                        message = outcome.errorMessage,
+                        resultJson = outcome.resultJson
+                    )
+                )
+            }
+
+            null -> {
+                ctx.onEvent(
+                    SessionEvent.ToolFailed(
+                        callId = request.id,
+                        toolName = request.name,
+                        kind = request.kind,
+                        message = "No outcome recorded",
+                        resultJson = resultJson
+                    )
+                )
+            }
+        }
+        return resultJson
     }
 
-    private fun buildToolCallRequest(toolCall: ToolCall, snap: SessionConfig): ToolCallRequest {
+    private fun buildToolCallRequest(toolCall: ToolCallSpec, snap: SessionConfig): ToolCallRequest {
         return LocalToolCallRequest(
             toolCall = toolCall,
             appParams = snap.appParamsSnapshot()
         )
+    }
+
+    private fun ensureConfigValid(snapshot: SessionConfig) {
+        if (!snapshot.endpoint.startsWith("http://") && !snapshot.endpoint.startsWith("https://")) {
+            throw ConfigInvalidException()
+        }
+        if (snapshot.model.isBlank()) {
+            throw ConfigInvalidException()
+        }
+    }
+
+    private fun classifyStage(t: Throwable): SessionEvent.Stage {
+        return when (t) {
+            is ConfigInvalidException -> SessionEvent.Stage.Session
+            is com.google.gson.JsonSyntaxException,
+            is IllegalStateException -> SessionEvent.Stage.Parse
+            else -> SessionEvent.Stage.Transport
+        }
     }
 }

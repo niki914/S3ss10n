@@ -1,9 +1,8 @@
 package com.niki914.s3ss10n
 
-import com.niki914.s3ss10n.chat.protocol.ToolDefinition
-import com.niki914.s3ss10n.chat.protocol.beans.Message
+import com.niki914.s3ss10n.protocol.openai.ToolDefinition
 
-class SessionConfig {
+open class SessionConfig {
     var endpoint: String = ""
     var apiKey: String = ""
     var model: String = ""
@@ -13,12 +12,12 @@ class SessionConfig {
     var readTimeoutSeconds: Long = 60
     var writeTimeoutSeconds: Long = 30
 
-    internal var hooksBlock: (suspend ToolCallRequest.() -> Message.Tool)? = null
+    internal var hooksBlock: (suspend ToolCallRequest.() -> String)? = null
     internal val localToolRegistry = LocalToolRegistryImpl()
     internal val mcpRegistry = McpRegistryImpl()
     internal val _appParams = mutableMapOf<String, Any?>()
 
-    fun hooks(block: suspend ToolCallRequest.() -> Message.Tool) {
+    fun hooks(block: suspend ToolCallRequest.() -> String) {
         hooksBlock = block
     }
 
@@ -41,18 +40,32 @@ class SessionConfig {
 
     internal fun snapshot(): SessionConfig {
         val newConfig = SessionConfig()
-        newConfig.endpoint = this.endpoint
-        newConfig.apiKey = this.apiKey
-        newConfig.model = this.model
-        newConfig.systemPrompt = this.systemPrompt
-        newConfig.temperature = this.temperature
-        newConfig.connectTimeoutSeconds = this.connectTimeoutSeconds
-        newConfig.readTimeoutSeconds = this.readTimeoutSeconds
-        newConfig.writeTimeoutSeconds = this.writeTimeoutSeconds
-        newConfig.hooksBlock = this.hooksBlock
-        newConfig.localToolRegistry.copyFrom(this.localToolRegistry)
-        newConfig.mcpRegistry.copyFrom(this.mcpRegistry)
-        newConfig._appParams.putAll(this._appParams)
+        copyInto(newConfig)
         return newConfig
+    }
+
+    internal fun toBuilder(): Builder {
+        return Builder().also { copyInto(it) }
+    }
+
+    protected fun copyInto(target: SessionConfig) {
+        target.endpoint = endpoint
+        target.apiKey = apiKey
+        target.model = model
+        target.systemPrompt = systemPrompt
+        target.temperature = temperature
+        target.connectTimeoutSeconds = connectTimeoutSeconds
+        target.readTimeoutSeconds = readTimeoutSeconds
+        target.writeTimeoutSeconds = writeTimeoutSeconds
+        target.hooksBlock = hooksBlock
+        target.localToolRegistry.copyFrom(localToolRegistry)
+        target.mcpRegistry.copyFrom(mcpRegistry)
+        target._appParams.putAll(_appParams)
+    }
+
+    class Builder : SessionConfig() {
+        fun build(): SessionConfig {
+            return snapshot()
+        }
     }
 }

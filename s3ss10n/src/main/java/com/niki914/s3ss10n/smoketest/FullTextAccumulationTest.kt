@@ -2,6 +2,7 @@ package com.niki914.s3ss10n.smoketest
 
 import com.niki914.s3ss10n.Session
 import com.niki914.s3ss10n.SessionEvent
+import com.niki914.s3ss10n.SessionProtocols
 import kotlinx.coroutines.runBlocking
 
 fun main9() = runBlocking {
@@ -10,7 +11,7 @@ fun main9() = runBlocking {
 
     // Test 1: Accumulator starts empty on send()
     println("--- Test 1: Accumulator starts empty on each send() ---")
-    val session = Session.Companion.open {
+    val session = Session.open<SessionProtocols.OpenAI> {
         endpoint = "https://api.openai.com/v1/chat/completions"
         apiKey = "sk-test"
         model = "gpt-4.1-mini"

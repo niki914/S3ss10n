@@ -7,6 +7,7 @@ import com.niki914.composebase.ComposeMVIViewModel
 import com.niki914.s3ss10n.Session
 import com.niki914.s3ss10n.SessionConfig
 import com.niki914.s3ss10n.SessionEvent
+import com.niki914.s3ss10n.SessionProtocols
 import com.niki914.s3ss10n.ToolCallKind
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -58,7 +59,7 @@ class ChatViewModel
         when (intent) {
             is ChatIntent.SetConfig -> {
                 intent.block(currentState.config)
-                session = Session.open {
+                session = Session.open<SessionProtocols.OpenAI> {
                     endpoint = currentState.config.endpoint
                     apiKey = currentState.config.apiKey
                     model = currentState.config.model

@@ -18,7 +18,8 @@ fun main() {
         "IntegrationTest" to { main8() },
         "FullTextAccumulationTest" to { main9() },
         "SessionUpdateTest" to { main10() },
-        "RoundContextIsolationTest" to { main11() }
+        "RoundContextIsolationTest" to { main11() },
+        "ProtocolAbstractionTest" to { main12() }
     )
 
     var passed = 0

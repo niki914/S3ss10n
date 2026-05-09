@@ -4,6 +4,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.transform
 import okhttp3.Call
 import okhttp3.Response
 import java.io.IOException
@@ -86,6 +87,15 @@ internal class SseClient {
                 )
             )
         }
+    }
+
+    fun executeDataLines(call: Call): Flow<String> {
+        return execute(call)
+            .transform { event ->
+                if (event is SseEvent.Data) {
+                    emit(event.content)
+                }
+            }
     }
 
     private suspend fun FlowCollector<SseEvent>.handleResponse(response: Response) {

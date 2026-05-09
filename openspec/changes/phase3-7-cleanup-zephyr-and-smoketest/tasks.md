@@ -55,6 +55,10 @@ internal inline fun <T> xTry(name: String, block: () -> T): T? = try {
   - OkHttpEngine.stream / close
   - ChatSession.runRound 网络层翻译
   - ToolCallWaiter / hooks 调用点
+  - T4 实际遗留：`s3ss10n/ChatSession.kt` 中 `doRound()` 的总兜底异常处理
+  - T4 实际遗留：`s3ss10n/ChatSession.kt` 中 `handleToolCall()` 的 hooks 调用异常处理
+  - T4 实际遗留：`s3ss10n/protocol/openai/OpenAIProtocol.kt` 中 `parseStream()` 的 JSON 反序列化异常处理
+  - T4 实际遗留：`s3ss10n/protocol/openai/OpenAIProtocol.kt` 中 toolCall 完整 JSON 判定的 `try/catch`
 - [ ] 3.2 全文 Grep `runCatching` —— 逐个替换为 `xTry("name", { ... })`
 - [ ] 3.3 全文 Grep `} catch (` —— 逐个判断是否能用 xTry 替换；不能的（如必须区分异常类型分别处理）单独评估，并在该处加 `// xTry-exempt: <reason>` 注释
 - [ ] 3.4 替换示例：
