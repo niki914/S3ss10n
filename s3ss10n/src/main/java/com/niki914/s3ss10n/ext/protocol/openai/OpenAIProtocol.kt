@@ -5,7 +5,7 @@ import com.niki914.s3ss10n.SessionEvent
 import com.niki914.s3ss10n.SessionSnapshot
 import com.niki914.s3ss10n.ToolCallSpec
 import com.niki914.s3ss10n.ToolDescriptor
-import com.niki914.s3ss10n.ext.json.GsonJsonCodec
+import com.niki914.s3ss10n.json.JsonCodecFactory
 import com.niki914.s3ss10n.json.JsonCodec
 import com.niki914.s3ss10n.net.HttpRequest
 import com.niki914.s3ss10n.ext.protocol.ChatProtocol
@@ -15,7 +15,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 
 class OpenAIProtocol(
-    private val codec: JsonCodec = GsonJsonCodec()
+    private val codec: JsonCodec = JsonCodecFactory.create()
 ) : ChatProtocol {
 
     override fun withCodec(codec: JsonCodec): ChatProtocol {
@@ -180,46 +180,7 @@ private class ToolCallAccumulator(
     }
 
     private fun isJson(content: String): Boolean {
-        if (!isCompleteJsonObject(content)) {
-            return false
-        }
         return codec.decodeMap(content) != null
-    }
-
-    private fun isCompleteJsonObject(content: String): Boolean {
-        val trimmed = content.trim()
-        if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
-            return false
-        }
-
-        var depth = 0
-        var inString = false
-        var escaping = false
-        trimmed.forEach { ch ->
-            if (inString) {
-                if (escaping) {
-                    escaping = false
-                    return@forEach
-                }
-                when (ch) {
-                    '\\' -> escaping = true
-                    '"' -> inString = false
-                }
-                return@forEach
-            }
-
-            when (ch) {
-                '"' -> inString = true
-                '{' -> depth++
-                '}' -> {
-                    depth--
-                    if (depth < 0) {
-                        return false
-                    }
-                }
-            }
-        }
-        return !inString && !escaping && depth == 0
     }
 
     private data class PendingToolCall(

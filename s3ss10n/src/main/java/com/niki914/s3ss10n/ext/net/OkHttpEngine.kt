@@ -70,17 +70,7 @@ class OkHttpEngine : HttpEngine {
                                 return
                             }
                             body.charStream().buffered().useLines { lines ->
-                                lines.forEach { line ->
-                                    if (!line.startsWith("data:")) {
-                                        return@forEach
-                                    }
-                                    val payload = line.substring(5).trim()
-                                    if (payload == "[DONE]") {
-                                        close()
-                                        return@useLines
-                                    }
-                                    trySend(payload)
-                                }
+                                lines.forEach { line -> trySend(line) }
                             }
                             close()
                         }

@@ -1,6 +1,6 @@
 package com.niki914.s3ss10n
 
-import com.niki914.s3ss10n.ext.json.GsonJsonCodec
+import com.niki914.s3ss10n.json.JsonCodecFactory
 import com.niki914.s3ss10n.json.JsonCodec
 
 enum class ToolValueType(val jsonType: String) {
@@ -113,7 +113,7 @@ interface LocalToolRegistry {
 }
 
 internal class LocalToolRegistryImpl : LocalToolRegistry {
-    override var codec: JsonCodec = GsonJsonCodec()
+    override var codec: JsonCodec = JsonCodecFactory.create()
     private val _tools = mutableMapOf<String, LocalToolConfig>()
 
     val tools: Map<String, LocalToolConfig> get() = _tools.toMap()

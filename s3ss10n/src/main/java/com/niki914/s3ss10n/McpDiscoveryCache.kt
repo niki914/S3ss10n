@@ -1,5 +1,8 @@
 package com.niki914.s3ss10n
 
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+
 internal data class McpDiscoveredTool(
     val name: String,
     val description: String,
@@ -9,24 +12,21 @@ internal data class McpDiscoveredTool(
 internal class McpDiscoveryCache {
     private val cache = mutableMapOf<CacheKey, List<McpDiscoveredTool>>()
     private val refreshing = mutableSetOf<CacheKey>()
+    private val mutex = Mutex()
 
-    @Synchronized
-    fun snapshot(serverName: String, fingerprint: String): List<McpDiscoveredTool>? {
-        return cache[CacheKey(serverName, fingerprint)]
+    suspend fun snapshot(serverName: String, fingerprint: String): List<McpDiscoveredTool>? = mutex.withLock {
+        cache[CacheKey(serverName, fingerprint)]
     }
 
-    @Synchronized
-    fun put(serverName: String, fingerprint: String, tools: List<McpDiscoveredTool>) {
+    suspend fun put(serverName: String, fingerprint: String, tools: List<McpDiscoveredTool>) = mutex.withLock {
         cache[CacheKey(serverName, fingerprint)] = tools
     }
 
-    @Synchronized
-    fun markRefreshing(serverName: String, fingerprint: String): Boolean {
-        return refreshing.add(CacheKey(serverName, fingerprint))
+    suspend fun markRefreshing(serverName: String, fingerprint: String): Boolean = mutex.withLock {
+        refreshing.add(CacheKey(serverName, fingerprint))
     }
 
-    @Synchronized
-    fun markFinished(serverName: String, fingerprint: String) {
+    suspend fun markFinished(serverName: String, fingerprint: String) = mutex.withLock {
         refreshing.remove(CacheKey(serverName, fingerprint))
     }
 

@@ -1,14 +1,14 @@
 package com.niki914.s3ss10n
 
-import com.niki914.s3ss10n.ext.json.GsonJsonCodec
+import com.niki914.s3ss10n.json.JsonCodecFactory
 import com.niki914.s3ss10n.json.JsonCodec
+import com.niki914.s3ss10n.net.SseLineParser
 import com.niki914.s3ss10n.net.HttpEngine
 import com.niki914.s3ss10n.ext.net.OkHttpEngine
 import com.niki914.s3ss10n.ext.protocol.ChatProtocol
 import com.niki914.s3ss10n.ext.protocol.ProtocolEvent
 import com.niki914.s3ss10n.util.HistoryKeeper
 import com.niki914.s3ss10n.util.ToolCallWaiter
-import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -26,9 +26,12 @@ class ChatSession internal constructor(
     private val protocol: ChatProtocol
 ) : Session {
 
-    private val configRef = AtomicReference(initialConfig)
+    private val configMutex = Mutex()
+    private var _config: SessionConfig = initialConfig
     private val engine: HttpEngine = initialConfig.httpEngine ?: OkHttpEngine()
-    private val jsonCodec: JsonCodec = initialConfig.jsonCodec ?: GsonJsonCodec()
+    private val jsonCodec: JsonCodec = initialConfig.jsonCodec ?: JsonCodecFactory.create()
+
+    private suspend fun thisConfig(): SessionConfig = configMutex.withLock { _config }
     private val mcpClient: McpClient = HttpMcpClient(engine = engine, codec = jsonCodec)
     private val mcpDiscoveryCache = McpDiscoveryCache()
     private val scope = CoroutineScope(SupervisorJob())
@@ -53,7 +56,7 @@ class ChatSession internal constructor(
     )
 
     override suspend fun send(text: String, onEvent: (SessionEvent) -> Unit) {
-        val config = configRef.get()
+        val config = thisConfig()
         scheduleDiscovery(config)
         val ctx = RoundContext(
             config.toRoundSnapshot(
@@ -66,11 +69,11 @@ class ChatSession internal constructor(
         runRound(ctx, text).join()
     }
 
-    override fun update(block: SessionConfig.Builder.() -> Unit) {
-        val updatedConfig = configRef.updateAndGet { current ->
-            val baseCodec = current.jsonCodec
-            val baseEngine = current.httpEngine
-            val updated = current.toBuilder().apply(block).build()
+    override suspend fun update(block: SessionConfig.Builder.() -> Unit) {
+        val updatedConfig = configMutex.withLock {
+            val baseCodec = _config.jsonCodec
+            val baseEngine = _config.httpEngine
+            val updated = _config.toBuilder().apply(block).build()
             if (updated.jsonCodec !== baseCodec) {
                 xLog("X", "update ignored open-only field: jsonCodec")
                 updated.jsonCodec = baseCodec
@@ -79,6 +82,7 @@ class ChatSession internal constructor(
                 xLog("X", "update ignored open-only field: httpEngine")
                 updated.httpEngine = baseEngine
             }
+            _config = updated
             updated
         }
         scheduleDiscovery(updatedConfig, refreshCached = true)
@@ -138,7 +142,8 @@ class ChatSession internal constructor(
                 pendingUserInput = userInput
             )
             val rawFlow = engine.stream(req)
-            protocol.parseStream(rawFlow).collect { event ->
+            val sseData = SseLineParser.parse(rawFlow)
+            protocol.parseStream(sseData).collect { event ->
                 when (event) {
                     is ProtocolEvent.TextDelta -> {
                         fullText.append(event.text)
@@ -218,7 +223,7 @@ class ChatSession internal constructor(
 
     private suspend fun handleToolCall(toolCall: ToolCallSpec, ctx: RoundContext): Message.Tool {
         if (ctx.configSnapshot.tools.find(toolCall.toolName) == null) {
-            val resultJson = """{"error":"Unknown tool '${toolCall.toolName}'"}"""
+            val resultJson = jsonCodec.encode(mapOf("error" to "Unknown tool '${toolCall.toolName}'"))
             ctx.onEvent(
                 SessionEvent.ToolFailed(
                     callId = toolCall.callId,
@@ -348,7 +353,8 @@ class ChatSession internal constructor(
         return when (val kind = descriptor?.kind) {
             ToolCallKind.Local -> LocalToolCallRequest(
                 toolCall = toolCall,
-                appParams = snap.appParams
+                appParams = snap.appParams,
+                codec = jsonCodec
             )
 
             is ToolCallKind.Mcp -> McpToolCallRequest(
@@ -356,7 +362,8 @@ class ChatSession internal constructor(
                 serverName = kind.serverName,
                 appParams = snap.appParams,
                 server = snap.mcpServer(kind.serverName),
-                mcpClient = mcpClient
+                mcpClient = mcpClient,
+                codec = jsonCodec
             )
 
             null -> error("Unknown tool '${toolCall.toolName}'")
@@ -381,7 +388,7 @@ class ChatSession internal constructor(
         }
     }
 
-    private fun discoveredToolsSnapshot(config: SessionConfig): Map<String, List<McpDiscoveredTool>> {
+    private suspend fun discoveredToolsSnapshot(config: SessionConfig): Map<String, List<McpDiscoveredTool>> {
         return config.mcpRegistry.servers.mapNotNull { (serverName, server) ->
             if (!server.enabled) return@mapNotNull null
             val fingerprint = server.discoveryFingerprint(serverName)
@@ -397,15 +404,15 @@ class ChatSession internal constructor(
         config.mcpRegistry.servers.forEach { (serverName, serverConfig) ->
             if (!serverConfig.enabled) return@forEach
             val fingerprint = serverConfig.discoveryFingerprint(serverName)
-            if (!refreshCached && mcpDiscoveryCache.snapshot(serverName, fingerprint) != null) return@forEach
-            if (!mcpDiscoveryCache.markRefreshing(serverName, fingerprint)) return@forEach
-            val serverSnapshot = serverConfig.deepCopy()
             scope.launch {
+                if (!refreshCached && mcpDiscoveryCache.snapshot(serverName, fingerprint) != null) return@launch
+                if (!mcpDiscoveryCache.markRefreshing(serverName, fingerprint)) return@launch
+                val serverSnapshot = serverConfig.deepCopy()
                 val tools = xTrySuspend("ChatSession.scheduleDiscovery") {
                     mcpClient.listTools(serverSnapshot)
                 }
                 if (tools != null) {
-                    val latestServer = configRef.get().mcpRegistry.servers[serverName]
+                    val latestServer = thisConfig().mcpRegistry.servers[serverName]
                     if (latestServer?.enabled == true &&
                         latestServer.discoveryFingerprint(serverName) == fingerprint
                     ) {

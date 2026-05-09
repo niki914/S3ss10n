@@ -1,18 +1,21 @@
 package com.niki914.s3ss10n
 
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+
 internal class McpLifecycleCache {
     private val states = mutableMapOf<String, Boolean>()
+    private val mutex = Mutex()
 
-    @Synchronized
-    fun isInitialized(fingerprint: String): Boolean = states[fingerprint] == true
-
-    @Synchronized
-    fun markInitialized(fingerprint: String) {
-        states[fingerprint] = true
+    suspend fun isInitialized(fingerprint: String): Boolean = mutex.withLock {
+        states[fingerprint] == true
     }
 
-    @Synchronized
-    fun invalidate(fingerprint: String) {
-        states.remove(fingerprint)
+    suspend fun markInitialized(fingerprint: String) {
+        mutex.withLock { states[fingerprint] = true }
+    }
+
+    suspend fun invalidate(fingerprint: String) {
+        mutex.withLock { states.remove(fingerprint) }
     }
 }

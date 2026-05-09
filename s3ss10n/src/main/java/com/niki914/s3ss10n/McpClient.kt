@@ -16,6 +16,17 @@ internal class HttpMcpClient(
 ) : McpClient {
     private val lifecycleCache = McpLifecycleCache()
 
+    private fun jsonRpcRequest(method: String, params: Map<String, Any?> = emptyMap()): String {
+        return codec.encode(
+            mapOf(
+                "jsonrpc" to "2.0",
+                "id" to System.currentTimeMillis().toString(),
+                "method" to method,
+                "params" to params
+            )
+        )
+    }
+
     override suspend fun call(server: McpServerConfig, toolName: String, argumentsJson: String): String {
         val transport = server.transport
         if (transport !is McpTransport.Http || transport.url.isBlank()) {
@@ -27,17 +38,8 @@ internal class HttpMcpClient(
         }) {
             ensureInitialized(server, fingerprint)
         }
-        val body = codec.encode(
-            mapOf(
-                "jsonrpc" to "2.0",
-                "id" to System.currentTimeMillis().toString(),
-                "method" to "tools/call",
-                "params" to mapOf(
-                    "name" to toolName,
-                    "arguments" to (codec.decodeMap(argumentsJson) ?: emptyMap<String, Any?>())
-                )
-            )
-        )
+        val arguments = codec.decodeMap(argumentsJson) ?: emptyMap<String, Any?>()
+        val body = jsonRpcRequest("tools/call", mapOf("name" to toolName, "arguments" to arguments))
         val rawResponse = engine.unary(
             HttpRequest(
                 method = "POST",
@@ -56,14 +58,14 @@ internal class HttpMcpClient(
     }
 
     private fun normalizeResult(rawResponse: String): String {
-        val root = codec.decodeMap(rawResponse) ?: return """{"error":"Invalid MCP response"}"""
+        val root = codec.decodeMap(rawResponse) ?: return codec.encode(mapOf("error" to "Invalid MCP response"))
         val error = root["error"]
         if (error != null) {
             val errorMap = error as? Map<*, *>
             val errMsg = errorMap?.get("message") as? String ?: "MCP tool call error"
             return codec.encode(mapOf("error" to errMsg))
         }
-        val result = root["result"] ?: return """{"error":"Missing result"}"""
+        val result = root["result"] ?: return codec.encode(mapOf("error" to "Missing result"))
         val resultMap = result as? Map<*, *> ?: return codec.encode(result)
         val isError = resultMap["isError"] as? Boolean == true
         val normalized: String? = normalizeStructuredContent(resultMap)
@@ -111,14 +113,7 @@ internal class HttpMcpClient(
         xTrySuspend("McpClient.listTools") {
             ensureInitialized(server, fingerprint)
         }
-        val body = codec.encode(
-            mapOf(
-                "jsonrpc" to "2.0",
-                "id" to System.currentTimeMillis().toString(),
-                "method" to "tools/list",
-                "params" to emptyMap<String, Any?>()
-            )
-        )
+        val body = jsonRpcRequest("tools/list")
         val response = engine.unary(
             HttpRequest(
                 method = "POST",
@@ -154,22 +149,11 @@ internal class HttpMcpClient(
     private suspend fun ensureInitialized(server: McpServerConfig, fingerprint: String) {
         if (lifecycleCache.isInitialized(fingerprint)) return
         val transport = server.transport as? McpTransport.Http ?: return
-        val initId = System.currentTimeMillis().toString()
-        val initBody = codec.encode(
-            mapOf(
-                "jsonrpc" to "2.0",
-                "id" to initId,
-                "method" to "initialize",
-                "params" to mapOf(
-                    "protocolVersion" to "2025-06-18",
-                    "capabilities" to emptyMap<String, Any?>(),
-                    "clientInfo" to mapOf(
-                        "name" to "s3ss10n",
-                        "version" to "1.0.0"
-                    )
-                )
-            )
-        )
+        val initBody = jsonRpcRequest("initialize", mapOf(
+            "protocolVersion" to "2025-06-18",
+            "capabilities" to emptyMap<String, Any?>(),
+            "clientInfo" to mapOf("name" to "s3ss10n", "version" to "1.0.0")
+        ))
         val initResponse = engine.unary(
             HttpRequest(
                 method = "POST",
@@ -189,13 +173,7 @@ internal class HttpMcpClient(
             val errMsg = (initRoot?.get("error") as? Map<*, *>)?.get("message") ?: "initialize failed"
             throw IllegalStateException("MCP initialize error: $errMsg")
         }
-        val notifBody = codec.encode(
-            mapOf(
-                "jsonrpc" to "2.0",
-                "method" to "notifications/initialized",
-                "params" to emptyMap<String, Any?>()
-            )
-        )
+        val notifBody = jsonRpcRequest("notifications/initialized")
         engine.unary(
             HttpRequest(
                 method = "POST",

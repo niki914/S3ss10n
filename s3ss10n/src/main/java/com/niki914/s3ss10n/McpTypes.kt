@@ -1,5 +1,7 @@
 package com.niki914.s3ss10n
 
+import java.net.URLEncoder
+
 sealed interface McpTransport {
     data class Http(var url: String = "") : McpTransport
 }
@@ -39,7 +41,7 @@ data class McpServerConfig(
         val transportPart = when (val current = transport) {
             is McpTransport.Http -> "http:${current.url}"
         }
-        val headersPart = headers.toSortedMap().entries.joinToString("&") { "${it.key}=${it.value}" }
+        val headersPart = headers.toSortedMap().entries.joinToString("&") { "${URLEncoder.encode(it.key, "UTF-8")}=${URLEncoder.encode(it.value, "UTF-8")}" }
         return "$serverName|enabled=$enabled|transport=$transportPart|headers=$headersPart"
     }
 }

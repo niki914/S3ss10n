@@ -1,5 +1,7 @@
 package com.niki914.s3ss10n
 
+import com.niki914.s3ss10n.json.JsonCodec
+
 internal sealed interface ToolCallOutcome {
     val resultJson: String
 
@@ -32,7 +34,8 @@ sealed interface ToolCallRequest {
 
 internal class LocalToolCallRequest(
     private val toolCall: ToolCallSpec,
-    override val appParams: Map<String, Any?>
+    override val appParams: Map<String, Any?>,
+    private val codec: JsonCodec
 ) : ToolCallRequest {
     override val id: String get() = toolCall.callId
     override val name: String get() = toolCall.toolName
@@ -55,7 +58,8 @@ internal class LocalToolCallRequest(
     }
 
     override fun error(message: String, contentJson: String): Message.Tool {
-        val resultJson = """{"error":"$message","detail":$contentJson}"""
+        val detailValue = codec.decodeMap(contentJson) ?: contentJson
+        val resultJson = codec.encode(mapOf("error" to message, "detail" to detailValue))
         lastOutcome = ToolCallOutcome.Failure(message, resultJson)
         return Message.Tool(
             callId = id,
@@ -70,7 +74,8 @@ internal class McpToolCallRequest(
     private val serverName: String,
     override val appParams: Map<String, Any?>,
     private val server: McpServerConfig?,
-    private val mcpClient: McpClient
+    private val mcpClient: McpClient,
+    private val codec: JsonCodec
 ) : ToolCallRequest {
     override val id: String get() = toolCall.callId
     override val name: String get() = toolCall.toolName
@@ -98,7 +103,7 @@ internal class McpToolCallRequest(
     }
 
     override fun error(message: String, contentJson: String): Message.Tool {
-        val resultJson = """{"error":"$message"}"""
+        val resultJson = codec.encode(mapOf("error" to message))
         lastOutcome = ToolCallOutcome.Failure(message, resultJson)
         return Message.Tool(
             callId = id,

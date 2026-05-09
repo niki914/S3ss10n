@@ -15,7 +15,7 @@ open class SessionConfig {
 
     /**
      * 自定义 JSON 编解码器。
-     * null 表示使用默认的 GsonJsonCodec()。
+     * null 表示使用默认的 JsonCodecFactory.create()。
      */
     var jsonCodec: JsonCodec? = null
 

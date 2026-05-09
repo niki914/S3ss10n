@@ -16,10 +16,10 @@ interface Session {
 
     suspend fun close()
 
-    fun update(block: SessionConfig.Builder.() -> Unit)
+    suspend fun update(block: SessionConfig.Builder.() -> Unit)
 
     companion object {
-        fun <P : ChatProtocol> open(
+        suspend fun <P : ChatProtocol> open(
             protocolClass: KClass<P>,
             builder: SessionConfig.Builder.() -> Unit
         ): Session {
@@ -34,7 +34,7 @@ interface Session {
             return ChatSession(initialConfig = config, protocol = protocol)
         }
 
-        inline fun <reified P : ChatProtocol> open(
+        suspend inline fun <reified P : ChatProtocol> open(
             noinline builder: SessionConfig.Builder.() -> Unit
         ): Session = open(P::class, builder)
     }
