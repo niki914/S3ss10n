@@ -6,8 +6,6 @@ interface Session {
         onEvent: (SessionEvent) -> Unit = {}
     )
 
-    suspend fun getHistory(): List<ChatPair>
-
     suspend fun resetConversation()
 
     suspend fun close()

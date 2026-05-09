@@ -6,7 +6,7 @@ import com.niki914.s3ss10n.chat.protocol.beans.user
 /**
  * Converts a chat history to the request message list.
  */
-fun List<ChatPair>.toMessages(): List<Message> {
+internal fun List<ChatPair>.toMessages(): List<Message> {
     val list = mutableListOf<Message>()
     forEach { pair ->
         list.add(pair.user)
@@ -20,7 +20,7 @@ fun List<ChatPair>.toMessages(): List<Message> {
  *
  * It contains one user message, followed by assistant output and optional tool messages.
  */
-data class ChatPair(
+internal data class ChatPair(
     val user: Message.User,
     val aiAndTools: List<Message>,
     val state: RoundState
@@ -29,7 +29,7 @@ data class ChatPair(
         /**
          * Creates a new round that is ready to start streaming.
          */
-        fun newPendingPair(userContent: String): ChatPair {
+        internal fun newPendingPair(userContent: String): ChatPair {
             return ChatPair(
                 user = user(userContent),
                 aiAndTools = mutableListOf(),
@@ -38,7 +38,7 @@ data class ChatPair(
         }
     }
 
-    enum class RoundState {
+    internal enum class RoundState {
         Pending, Generating, Succeeded, Failed
     }
 

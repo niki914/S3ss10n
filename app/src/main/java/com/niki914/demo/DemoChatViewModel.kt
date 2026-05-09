@@ -4,7 +4,6 @@ import androidx.compose.runtime.Composable
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import com.niki914.composebase.ComposeMVIViewModel
-import com.niki914.s3ss10n.ChatPair
 import com.niki914.s3ss10n.Session
 import com.niki914.s3ss10n.SessionConfig
 import com.niki914.s3ss10n.SessionEvent
@@ -12,8 +11,15 @@ import com.niki914.s3ss10n.ToolCallKind
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
+data class DemoTurn(
+    val userMsg: String,
+    val aiText: String,
+    val isGenerating: Boolean = false,
+    val isError: Boolean = false
+)
+
 data class ChatState(
-    val pairs: List<ChatPair> = emptyList(),
+    val pairs: List<DemoTurn> = emptyList(),
     val isGenerating: Boolean = false,
     val config: SessionConfig
 )
@@ -95,21 +101,70 @@ class ChatViewModel
                 s.send(intent.msg) { event ->
                     when (event) {
                         is SessionEvent.RoundStarted -> {
-                            updateState { copy(isGenerating = true) }
+                            updateState { 
+                                val newTurn = DemoTurn(userMsg = event.input, aiText = "", isGenerating = true)
+                                copy(isGenerating = true, pairs = pairs + newTurn) 
+                            }
                         }
-                        is SessionEvent.TextDelta,
-                        is SessionEvent.ToolRunning,
-                        is SessionEvent.ToolSucceeded,
+                        is SessionEvent.TextDelta -> {
+                            updateState {
+                                val currentPairs = pairs.toMutableList()
+                                if (currentPairs.isNotEmpty()) {
+                                    val last = currentPairs.last()
+                                    currentPairs[currentPairs.size - 1] = last.copy(aiText = event.fullText)
+                                }
+                                copy(pairs = currentPairs)
+                            }
+                        }
+                        is SessionEvent.ToolRunning -> {
+                            updateState {
+                                val currentPairs = pairs.toMutableList()
+                                if (currentPairs.isNotEmpty()) {
+                                    val last = currentPairs.last()
+                                    currentPairs[currentPairs.size - 1] = last.copy(aiText = last.aiText + "\n[Tool running: ${event.toolName}]")
+                                }
+                                copy(pairs = currentPairs)
+                            }
+                        }
+                        is SessionEvent.ToolSucceeded -> {
+                            updateState {
+                                val currentPairs = pairs.toMutableList()
+                                if (currentPairs.isNotEmpty()) {
+                                    val last = currentPairs.last()
+                                    currentPairs[currentPairs.size - 1] = last.copy(aiText = last.aiText + "\n[Tool succeeded: ${event.toolName}]")
+                                }
+                                copy(pairs = currentPairs)
+                            }
+                        }
                         is SessionEvent.ToolFailed -> {
-                            refreshPairs(s)
+                            updateState {
+                                val currentPairs = pairs.toMutableList()
+                                if (currentPairs.isNotEmpty()) {
+                                    val last = currentPairs.last()
+                                    currentPairs[currentPairs.size - 1] = last.copy(aiText = last.aiText + "\n[Tool failed: ${event.toolName}]")
+                                }
+                                copy(pairs = currentPairs)
+                            }
                         }
                         is SessionEvent.RoundCompleted -> {
-                            updateState { copy(isGenerating = false) }
-                            refreshPairs(s)
+                            updateState {
+                                val currentPairs = pairs.toMutableList()
+                                if (currentPairs.isNotEmpty()) {
+                                    val last = currentPairs.last()
+                                    currentPairs[currentPairs.size - 1] = last.copy(aiText = event.fullText, isGenerating = false)
+                                }
+                                copy(isGenerating = false, pairs = currentPairs)
+                            }
                         }
                         is SessionEvent.Error -> {
-                            updateState { copy(isGenerating = false) }
-                            refreshPairs(s)
+                            updateState {
+                                val currentPairs = pairs.toMutableList()
+                                if (currentPairs.isNotEmpty()) {
+                                    val last = currentPairs.last()
+                                    currentPairs[currentPairs.size - 1] = last.copy(isGenerating = false, isError = true)
+                                }
+                                copy(isGenerating = false, pairs = currentPairs)
+                            }
                             sendEffect(ChatEffect.ErrorOccurred(event.message))
                         }
                     }
@@ -119,21 +174,11 @@ class ChatViewModel
             is ChatIntent.NewRoom -> {
                 viewModelScope.launch {
                     session?.resetConversation()
-                    session?.let { refreshPairs(it) }
                     sendEffect(ChatEffect.NewRoomCreated)
                     updateState {
-                        copy(isGenerating = false)
+                        copy(isGenerating = false, pairs = emptyList())
                     }
                 }
-            }
-        }
-    }
-
-    private fun refreshPairs(session: Session) {
-        viewModelScope.launch(Dispatchers.Default) {
-            val history = session.getHistory()
-            updateState {
-                copy(pairs = history)
             }
         }
     }

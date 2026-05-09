@@ -50,7 +50,7 @@ import androidx.compose.ui.unit.dp
 import com.niki914.demo.ChatEffect
 import com.niki914.demo.ChatIntent
 import com.niki914.demo.ChatViewModel
-import com.niki914.s3ss10n.ChatPair
+import com.niki914.demo.DemoTurn
 import com.niki914.s3ss10n.chat.protocol.beans.Message
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.map
@@ -438,58 +438,27 @@ private fun ToolStatusBubble(item: UiToolStatusItem) {
     }
 }
 
-private fun buildUiItems(pairs: List<ChatPair>): List<UiItem> {
+private fun buildUiItems(pairs: List<DemoTurn>): List<UiItem> {
     val out = ArrayList<UiItem>(pairs.size * 2)
     pairs.forEachIndexed { pairIndex, pair ->
         out += UiBubbleItem(
             key = "p${pairIndex}-u",
             role = UiBubbleRole.User,
             title = "User",
-            content = pair.user.content
+            content = pair.userMsg
         )
-
-        val finishedToolIds = pair.aiAndTools
-            .filterIsInstance<Message.Tool>()
-            .map { it.toolCallId }
-            .toSet()
-
-        val toolCalls = pair.aiAndTools
-            .filterIsInstance<Message.Assistant>()
-            .flatMap { it.toolCalls.orEmpty() }
-            .filter { it.id != null }
-            .distinctBy { it.id }
-
-        toolCalls.forEachIndexed { idx, toolCall ->
-            val name = toolCall.function?.name?.takeIf { it.isNotBlank() } ?: "tool"
-            val id = toolCall.id ?: idx.toString()
-            out += UiToolStatusItem(
-                key = "p${pairIndex}-t-${id}",
-                name = name,
-                isRunning = !finishedToolIds.contains(toolCall.id)
-            )
-        }
-
-        val assistantText = pair.aiAndTools
-            .filterIsInstance<Message.Assistant>()
-            .mapNotNull { assistant -> assistant.content?.takeIf { it.isNotBlank() } }
-            .joinToString("\n\n")
 
         out += UiBubbleItem(
             key = "p${pairIndex}-a",
             role = UiBubbleRole.Assistant,
             title = "Assistant",
-            content = assistantText,
-            stateLabel = pair.state.toStateLabel()
+            content = pair.aiText,
+            stateLabel = when {
+                pair.isError -> "Failed"
+                pair.isGenerating -> "Generating"
+                else -> null
+            }
         )
     }
     return out
-}
-
-private fun ChatPair.RoundState.toStateLabel(): String? {
-    return when (this) {
-        ChatPair.RoundState.Pending -> "Pending"
-        ChatPair.RoundState.Generating -> "Generating"
-        ChatPair.RoundState.Succeeded -> null
-        ChatPair.RoundState.Failed -> "Failed"
-    }
 }
