@@ -50,7 +50,9 @@ internal inline fun <T> xTry(name: String, block: () -> T): T? = try {
 
 - [ ] 3.1 收集 T2~T6 留下的"T7 待办清单"（包括但不限于）：
   - OpenAIProtocol.parseStream / buildRequest 内部
+  - `openai-compatible-reasoning-context` 新增的 `ProtocolEvent.ReasoningDelta` / assistant `reasoningContent` 累积与回传路径
   - OpenAIProtocol 中的 toolCall delta 拼接判断完整 JSON
+  - `openai-compatible-reasoning-context` 对 toolCall 完整性判断的新实现（优先无异常控制流；剩余异常容错再收口到 `xTry/xLog`）
   - GsonJsonCodec.decode / decodeMap / decodeList
   - OkHttpEngine.stream / close
   - ChatSession.runRound 网络层翻译

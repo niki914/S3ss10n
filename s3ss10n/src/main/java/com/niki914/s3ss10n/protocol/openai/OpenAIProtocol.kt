@@ -76,6 +76,9 @@ class OpenAIProtocol(
             delta.content
                 ?.takeIf { it.isNotEmpty() }
                 ?.let { emit(ProtocolEvent.TextDelta(it)) }
+            delta.reasoning_content
+                ?.takeIf { it.isNotEmpty() }
+                ?.let { emit(ProtocolEvent.ReasoningDelta(it)) }
             delta.tool_calls.orEmpty().forEach { toolCallDelta ->
                 toolCallDelta ?: return@forEach
                 val ready = toolCallAccumulator.push(toolCallDelta) ?: return@forEach
@@ -109,7 +112,8 @@ class OpenAIProtocol(
             is ChatTurn.User -> OpenAIMessage.User(content)
             is ChatTurn.Assistant -> OpenAIMessage.Assistant(
                 content = content.ifEmpty { null },
-                tool_calls = toolCalls.map { it.toOpenAIToolCall() }.ifEmpty { null }
+                tool_calls = toolCalls.map { it.toOpenAIToolCall() }.ifEmpty { null },
+                reasoning_content = reasoningContent?.ifEmpty { null }
             )
             is ChatTurn.ToolResult -> OpenAIMessage.Tool(
                 tool_call_id = callId,
@@ -168,7 +172,46 @@ private class ToolCallAccumulator(
     }
 
     private fun isJson(content: String): Boolean {
+        if (!isCompleteJsonObject(content)) {
+            return false
+        }
         return codec.decodeMap(content) != null
+    }
+
+    private fun isCompleteJsonObject(content: String): Boolean {
+        val trimmed = content.trim()
+        if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+            return false
+        }
+
+        var depth = 0
+        var inString = false
+        var escaping = false
+        trimmed.forEach { ch ->
+            if (inString) {
+                if (escaping) {
+                    escaping = false
+                    return@forEach
+                }
+                when (ch) {
+                    '\\' -> escaping = true
+                    '"' -> inString = false
+                }
+                return@forEach
+            }
+
+            when (ch) {
+                '"' -> inString = true
+                '{' -> depth++
+                '}' -> {
+                    depth--
+                    if (depth < 0) {
+                        return false
+                    }
+                }
+            }
+        }
+        return !inString && !escaping && depth == 0
     }
 
     private data class PendingToolCall(

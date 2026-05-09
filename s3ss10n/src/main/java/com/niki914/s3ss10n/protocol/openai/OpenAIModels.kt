@@ -24,7 +24,8 @@ internal sealed class OpenAIMessage(val role: String) {
     @Keep
     data class Assistant(
         override val content: String?,
-        val tool_calls: List<ToolCall>? = null
+        val tool_calls: List<ToolCall>? = null,
+        val reasoning_content: String? = null
     ) : OpenAIMessage("assistant")
 
     @Keep
@@ -75,6 +76,7 @@ internal data class Choice(
 @Keep
 internal data class Delta(
     val content: String?,
+    val reasoning_content: String?,
     val tool_calls: List<ToolCall?>?
 )
 

@@ -98,6 +98,7 @@ class ChatSession internal constructor(
             }
 
             val fullText = StringBuilder()
+            val reasoningContent = StringBuilder()
             val toolCalls = mutableListOf<ToolCallSpec>()
             val req = protocol.buildRequest(
                 snapshot = ctx.configSnapshot,
@@ -116,6 +117,10 @@ class ChatSession internal constructor(
                                 fullText = ctx.textAccumulator.toString()
                             )
                         )
+                    }
+
+                    is ProtocolEvent.ReasoningDelta -> {
+                        reasoningContent.append(event.text)
                     }
 
                     is ProtocolEvent.ToolCallReady -> {
@@ -148,7 +153,8 @@ class ChatSession internal constructor(
             historyKeeper.add(
                 ChatTurn.Assistant(
                     content = fullText.toString(),
-                    toolCalls = toolCalls.toList()
+                    toolCalls = toolCalls.toList(),
+                    reasoningContent = reasoningContent.toString().ifEmpty { null }
                 )
             )
 

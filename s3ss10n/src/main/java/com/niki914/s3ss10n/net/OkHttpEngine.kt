@@ -40,7 +40,17 @@ class OkHttpEngine : HttpEngine {
                 override fun onResponse(call: Call, response: okhttp3.Response) {
                     response.use { currentResponse ->
                         if (!currentResponse.isSuccessful) {
-                            close(IllegalStateException("HTTP ${currentResponse.code}: ${currentResponse.message}"))
+                            val responseBody = currentResponse.body?.string()?.trim().orEmpty()
+                            val bodySuffix = if (responseBody.isEmpty()) {
+                                ""
+                            } else {
+                                ", body=$responseBody"
+                            }
+                            close(
+                                IllegalStateException(
+                                    "HTTP ${currentResponse.code} ${currentResponse.message}$bodySuffix"
+                                )
+                            )
                             return
                         }
                         val body = currentResponse.body ?: run {
