@@ -14,7 +14,8 @@ interface Session {
 
     companion object {
         fun open(block: SessionConfig.() -> Unit): Session {
-            return SessionImpl(SessionConfig().apply(block))
+            val config = SessionConfig().apply(block)
+            return ChatSession(config)
         }
     }
 }

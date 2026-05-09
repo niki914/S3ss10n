@@ -3,7 +3,7 @@ package com.niki914.s3ss10n
 import kotlinx.coroutines.runBlocking
 
 fun main() = runBlocking {
-    println("=== SessionImpl Smoke Test ===")
+    println("=== Session Smoke Test (via ChatSession) ===")
 
     // Create Session with full config
     val session = Session.open {
