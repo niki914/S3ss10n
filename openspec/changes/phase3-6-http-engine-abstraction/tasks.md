@@ -59,7 +59,7 @@ interface HttpEngine {
 
 ## 5. 修改 OpenAIProtocol.buildRequest 实现
 
-- [ ] 5.1 实现 url 拼接：`"${snapshot.baseUrl.trimEnd('/')}/v1/chat/completions"`
+- [ ] 5.1 `HttpRequest.url` 直接使用 `snapshot.endpoint`（语义为完整 URL）
 - [ ] 5.2 headers：`mapOf("Authorization" to "Bearer ${snapshot.apiKey}", "Content-Type" to "application/json")`
 - [ ] 5.3 body：用 codec.encode(...) 序列化为 JSON String，再 `.toByteArray(Charsets.UTF_8)`
 - [ ] 5.4 timeoutMs：`HttpTimeouts(snapshot.connectTimeoutMs, snapshot.readTimeoutMs, snapshot.writeTimeoutMs)`
@@ -106,7 +106,7 @@ interface HttpEngine {
 ## 11. 烟测
 
 - [ ] 11.1 新增 `HttpEngineAbstractionTest.kt`：用 `class FakeEngine : HttpEngine { override fun stream(req) = flowOf("...") }` 断言不走 OkHttp
-- [ ] 11.2 新增 `RequestSnapshotTest.kt`：在 send 进行中调 `update { baseUrl = "newUrl" }`；断言进行中 round 的 HttpRequest.url 仍是 oldUrl，新 send 才用 newUrl —— 验证 PRD snapshot 语义
+- [ ] 11.2 新增 `RequestSnapshotTest.kt`：在 send 进行中调 `update { endpoint = "newUrl" }`；断言进行中 round 的 HttpRequest.url 仍是 oldUrl，新 send 才用 newUrl —— 验证 PRD snapshot 语义
 - [ ] 11.3 跑 `SessionImplTest.kt` 全量验证 OkHttpEngine 默认行为不回归
 
 ## 12. 编译与回归

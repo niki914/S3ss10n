@@ -19,6 +19,12 @@ open class SessionConfig {
      */
     var jsonCodec: JsonCodec? = null
 
+    /**
+     * 自定义 HttpEngine。
+     * null 表示使用默认 OkHttpEngine()；自定义 engine 时 OkHttp 不会被实例化
+     */
+    var httpEngine: com.niki914.s3ss10n.net.HttpEngine? = null
+
     internal var hooksBlock: (suspend ToolCallRequest.() -> String)? = null
     internal val localToolRegistry = LocalToolRegistryImpl()
     internal val mcpRegistry = McpRegistryImpl()
@@ -65,6 +71,7 @@ open class SessionConfig {
         target.readTimeoutSeconds = readTimeoutSeconds
         target.writeTimeoutSeconds = writeTimeoutSeconds
         target.jsonCodec = jsonCodec
+        target.httpEngine = httpEngine
         target.hooksBlock = hooksBlock
         target.localToolRegistry.copyFrom(localToolRegistry)
         target.mcpRegistry.copyFrom(mcpRegistry)

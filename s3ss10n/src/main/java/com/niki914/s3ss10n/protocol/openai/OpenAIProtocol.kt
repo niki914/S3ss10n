@@ -7,6 +7,7 @@ import com.niki914.s3ss10n.SessionEvent
 import com.niki914.s3ss10n.ToolCallSpec
 import com.niki914.s3ss10n.json.GsonJsonCodec
 import com.niki914.s3ss10n.json.JsonCodec
+import com.niki914.s3ss10n.net.HttpRequest
 import com.niki914.s3ss10n.protocol.ChatProtocol
 import com.niki914.s3ss10n.protocol.ProtocolEvent
 import kotlinx.coroutines.flow.Flow
@@ -21,11 +22,11 @@ class OpenAIProtocol(
         return OpenAIProtocol(codec)
     }
 
-    override fun buildRequestBody(
+    override fun buildRequest(
         snapshot: SessionConfig,
         history: List<ChatTurn>,
         pendingUserInput: String?
-    ): String {
+    ): HttpRequest {
         val messages = mutableListOf<OpenAIMessage>()
         snapshot.systemPrompt
             ?.takeIf { it.isNotBlank() }
@@ -36,13 +37,28 @@ class OpenAIProtocol(
         pendingUserInput
             ?.takeIf { it.isNotBlank() }
             ?.let { messages += OpenAIMessage.User(it) }
-        return codec.encode(
+        val bodyStr = codec.encode(
             OpenAIChatRequestBody(
                 model = snapshot.model,
                 messages = messages,
                 tools = snapshot.buildToolDefinitions().ifEmpty { null },
                 temperature = snapshot.temperature
             )
+        )
+        return com.niki914.s3ss10n.net.HttpRequest(
+            method = "POST",
+            url = snapshot.endpoint.trim(),
+            headers = mapOf(
+                "Authorization" to "Bearer ${snapshot.apiKey}",
+                "Content-Type" to "application/json"
+            ),
+            body = bodyStr.toByteArray(Charsets.UTF_8),
+            timeoutMs = com.niki914.s3ss10n.net.HttpTimeouts(
+                connectMs = snapshot.connectTimeoutSeconds * 1000,
+                readMs = snapshot.readTimeoutSeconds * 1000,
+                writeMs = snapshot.writeTimeoutSeconds * 1000
+            ),
+            isStreaming = true
         )
     }
 

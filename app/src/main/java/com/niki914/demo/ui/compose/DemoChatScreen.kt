@@ -65,7 +65,7 @@ fun DemoChatScreen(vm: ChatViewModel) {
     var isConfigured by rememberSaveable { mutableStateOf(false) }
 
     var endpoint by rememberSaveable { mutableStateOf("https://api.deepseek.com/v1/chat/completions") }
-    var apiKey by rememberSaveable { mutableStateOf("sk-1307bc01b96c49c0909c7bd0a4dacf6d") }
+    var apiKey by rememberSaveable { mutableStateOf("sk-xxx") }
     var model by rememberSaveable { mutableStateOf("deepseek-v4-flash") }
     var systemPrompt by rememberSaveable { mutableStateOf("") }
 

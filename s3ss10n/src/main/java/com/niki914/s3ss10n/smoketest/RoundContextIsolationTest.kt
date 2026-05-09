@@ -12,7 +12,7 @@ fun main11() = runBlocking {
 
     val session = Session.open<SessionProtocols.OpenAI> {
         endpoint ="https://api.deepseek.com/v1/chat/completions"  
-        apiKey = "sk-1307bc01b96c49c0909c7bd0a4dacf6d"
+        apiKey = "sk-xxx"
         model = "deepseek-v4-flash"
     }
 

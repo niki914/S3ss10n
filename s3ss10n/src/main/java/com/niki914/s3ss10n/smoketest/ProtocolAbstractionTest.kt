@@ -6,16 +6,24 @@ import com.niki914.s3ss10n.SessionConfig
 import com.niki914.s3ss10n.protocol.ChatProtocol
 import com.niki914.s3ss10n.protocol.ProtocolEvent
 import com.niki914.s3ss10n.protocol.ProtocolRegistry
+import com.niki914.s3ss10n.net.HttpRequest
+import com.niki914.s3ss10n.net.HttpTimeouts
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.runBlocking
 
 private class FakeProtocol : ChatProtocol {
-    override fun buildRequestBody(
+    override fun buildRequest(
         snapshot: SessionConfig,
         history: List<ChatTurn>,
         pendingUserInput: String?
-    ): String = """{"fake":true}"""
+    ): HttpRequest = HttpRequest(
+        method = "POST",
+        url = snapshot.endpoint,
+        headers = emptyMap(),
+        body = """{"fake":true}""".toByteArray(Charsets.UTF_8),
+        timeoutMs = HttpTimeouts(0, 0, 0)
+    )
 
     override fun parseStream(rawSseLines: Flow<String>): Flow<ProtocolEvent> = emptyFlow()
 

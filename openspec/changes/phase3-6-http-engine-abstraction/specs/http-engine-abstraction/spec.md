@@ -70,9 +70,9 @@ The `ChatProtocol` interface SHALL replace `buildRequestBody(...)` (returning `S
 
 #### Scenario: OpenAIProtocol builds complete HttpRequest
 
-- **GIVEN** a snapshot with `baseUrl = "https://api.openai.com"`, `apiKey = "sk-x"`, `connectTimeoutMs = 5000`, etc.
+- **GIVEN** a snapshot with `endpoint = "https://api.openai.com/v1/chat/completions"`, `apiKey = "sk-x"`, `connectTimeoutSeconds = 5`, etc.
 - **WHEN** `OpenAIProtocol.buildRequest(snapshot, history, pendingUserInput = "hi")` is called
-- **THEN** the returned `HttpRequest` has `url = "https://api.openai.com/v1/chat/completions"` (or the protocol's canonical path)
+- **THEN** the returned `HttpRequest` has `url = "https://api.openai.com/v1/chat/completions"`
 - **THEN** headers contain `Authorization: Bearer sk-x` and `Content-Type: application/json`
 - **THEN** body is the JSON byte array of the messages payload
 - **THEN** timeoutMs.connectMs equals `5000`

@@ -46,7 +46,7 @@ The implementation SHALL resolve the concrete `ChatProtocol` instance bound to `
 #### Scenario: PRD-form open call compiles and runs
 
 - **GIVEN** `SessionProtocols.OpenAI` is the type token for the OpenAI protocol
-- **WHEN** the developer writes `Session.open<SessionProtocols.OpenAI> { baseUrl = "..."; apiKey = "..." }`
+- **WHEN** the developer writes `Session.open<SessionProtocols.OpenAI> { endpoint = "..."; apiKey = "..." }`
 - **THEN** it compiles
 - **THEN** the returned `Session` is bound to an `OpenAIProtocol` instance for its lifetime
 
@@ -115,3 +115,18 @@ The `ChatSession` class SHALL hold a reference to a `ChatProtocol` injected via 
 - **WHEN** two threads simultaneously call `ProtocolRegistry.register(...)` with different protocol classes
 - **THEN** both registrations succeed
 - **THEN** subsequent lookups return the correct instances
+
+## MODIFIED Requirements (Phase 3-6)
+
+### Requirement: ChatProtocol.buildRequest replaces buildRequestBody
+
+The `ChatProtocol` interface SHALL replace `buildRequestBody(...)` (returning `String`) with `buildRequest(snapshot, history, pendingUserInput): HttpRequest`. The protocol implementation SHALL fully populate url, headers (including auth), body, and timeouts from the snapshot.
+
+#### Scenario: OpenAIProtocol builds complete HttpRequest
+
+- **GIVEN** a snapshot with `endpoint = "https://api.openai.com/v1/chat/completions"`, `apiKey = "sk-x"`, `connectTimeoutSeconds = 5`, etc.
+- **WHEN** `OpenAIProtocol.buildRequest(snapshot, history, pendingUserInput = "hi")` is called
+- **THEN** the returned `HttpRequest` has `url = "https://api.openai.com/v1/chat/completions"` (or the protocol's canonical path)
+- **THEN** headers contain `Authorization: Bearer sk-x` and `Content-Type: application/json`
+- **THEN** body is the JSON byte array of the messages payload
+- **THEN** timeoutMs.connectMs equals `5000`

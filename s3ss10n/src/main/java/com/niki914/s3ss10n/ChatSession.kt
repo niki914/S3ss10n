@@ -1,9 +1,9 @@
 package com.niki914.s3ss10n
 
 import android.util.Log
-import com.niki914.s3ss10n.chat.ChatService
 import com.niki914.s3ss10n.json.GsonJsonCodec
-import com.niki914.s3ss10n.net.OkhttpClientManager
+import com.niki914.s3ss10n.net.HttpEngine
+import com.niki914.s3ss10n.net.OkHttpEngine
 import com.niki914.s3ss10n.protocol.ChatProtocol
 import com.niki914.s3ss10n.protocol.ProtocolEvent
 import com.niki914.s3ss10n.util.HistoryKeeper
@@ -27,8 +27,7 @@ class ChatSession internal constructor(
 ) : Session {
 
     private val configRef = AtomicReference(initialConfig)
-    private val clientManager = OkhttpClientManager { configRef.get() }
-    private val service by lazy { ChatService(clientManager.okHttpClient) }
+    private val engine: HttpEngine = initialConfig.httpEngine ?: OkHttpEngine()
     private val scope = CoroutineScope(SupervisorJob())
     private var currJob: Job? = null
     private val chatMutex = Mutex()
@@ -72,6 +71,7 @@ class ChatSession internal constructor(
 
     override suspend fun close() {
         scope.cancel()
+        engine.close()
     }
 
     private fun runRound(ctx: RoundContext, userInput: String?) = scope.launch {
@@ -99,15 +99,13 @@ class ChatSession internal constructor(
 
             val fullText = StringBuilder()
             val toolCalls = mutableListOf<ToolCallSpec>()
-            protocol.parseStream(
-                service.newChat(
-                    protocol.buildRequestBody(
-                        snapshot = ctx.configSnapshot,
-                        history = historyKeeper.snapshot(),
-                        pendingUserInput = userInput
-                    )
-                )
-            ).collect { event ->
+            val req = protocol.buildRequest(
+                snapshot = ctx.configSnapshot,
+                history = historyKeeper.snapshot(),
+                pendingUserInput = userInput
+            )
+            val rawFlow = engine.stream(req)
+            protocol.parseStream(rawFlow).collect { event ->
                 when (event) {
                     is ProtocolEvent.TextDelta -> {
                         fullText.append(event.text)

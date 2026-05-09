@@ -20,7 +20,9 @@ fun main() {
         "SessionUpdateTest" to { main10() },
         "RoundContextIsolationTest" to { main11() },
         "ProtocolAbstractionTest" to { main12() },
-        "JsonCodecAbstractionTest" to { main13() }
+        "JsonCodecAbstractionTest" to { main13() },
+        "HttpEngineAbstractionTest" to { main14() },
+        "RequestSnapshotTest" to { main15() }
     )
 
     var passed = 0

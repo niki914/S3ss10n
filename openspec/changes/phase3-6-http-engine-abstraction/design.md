@@ -33,7 +33,7 @@
 ```kotlin
 data class HttpRequest(
     val method: String,                       // "POST"
-    val url: String,                          // 已拼好 baseUrl + path
+    val url: String,                          // 完整请求 URL
     val headers: Map<String, String>,         // 已包含 Authorization、Content-Type
     val body: ByteArray?,                     // JSON bytes
     val timeoutMs: HttpTimeouts,              // 连接/读/写
@@ -95,7 +95,7 @@ interface ChatProtocol {
 
 **原因**：
 - 协议负责把 url 路径、headers（含鉴权）、body 全部装好
-- ChatSession 不知道 OpenAI 走 POST /v1/chat/completions，Anthropic 走 POST /v1/messages
+- ChatSession 不知道 OpenAI / Anthropic 等协议各自的 endpoint 长什么样
 - 鉴权 header 也是协议职责（OpenAI 是 `Authorization: Bearer ...`，Anthropic 是 `x-api-key: ...`）
 
 **替代方案**：
@@ -107,7 +107,7 @@ interface ChatProtocol {
 - 删除 `DynamicURLInterceptor` / `DynamicTimeoutInterceptor` / `ChatApiInterceptor`
 - 鉴权 header（`Authorization: Bearer ${apiKey}`）由 OpenAIProtocol.buildRequest 在构造 HttpRequest 时塞进 headers
 - timeout 由 ChatSession 在调 engine.stream 前从 snapshot 取出，作为 HttpRequest.timeoutMs 字段
-- url 由 OpenAIProtocol.buildRequest 直接 `"${snapshot.baseUrl}/v1/chat/completions"`
+- url 由 OpenAIProtocol.buildRequest 直接使用 `snapshot.endpoint`
 
 **原因**：
 - snapshot 进入 buildRequest 后所有"动态"字段就固化了
