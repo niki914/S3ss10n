@@ -106,6 +106,7 @@ class ChatViewModel
                 }
                 session = when (currentState.selectedProtocol) {
                     "Anthropic" -> Session.open<SessionProtocols.Anthropic>(configBlock)
+                    "DeepSeek" -> Session.open<SessionProtocols.DeepSeek>(configBlock)
                     else -> Session.open<SessionProtocols.OpenAI>(configBlock)
                 }
             }

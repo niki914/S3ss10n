@@ -69,7 +69,7 @@ fun DemoChatScreen(vm: ChatViewModel) {
     var apiKey by rememberSaveable { mutableStateOf("sk-xxx") }
     var model by rememberSaveable { mutableStateOf("deepseek-v4-flash") }
     var systemPrompt by rememberSaveable { mutableStateOf("") }
-    var selectedProtocol by rememberSaveable { mutableStateOf("Anthropic") }
+    var selectedProtocol by rememberSaveable { mutableStateOf("DeepSeek") }
 
     var input by rememberSaveable { mutableStateOf("") }
 
@@ -165,8 +165,12 @@ fun DemoChatScreen(vm: ChatViewModel) {
                     onProtocolChange = { protocol ->
                         selectedProtocol = protocol
                         endpoint = when (protocol) {
-                            "Anthropic" -> "https://api.anthropic.com/v1/messages"
-                            else -> "https://api.openai.com/v1/chat/completions"
+                            "Anthropic" -> "https://api.deepseek.com/anthropic/v1/messages"
+                            "DeepSeek" -> "https://api.deepseek.com/v1/chat/completions"
+                            else -> "https://api.deepseek.com/v1/chat/completions"
+                        }
+                        model = when (protocol) {
+                            else -> "deepseek-v4-flash"
                         }
                     },
                     onEndpointChange = { endpoint = it },
@@ -252,6 +256,11 @@ private fun ConfigPanel(
                     selected = selectedProtocol == "Anthropic",
                     onClick = { onProtocolChange("Anthropic") },
                     label = { Text("Anthropic") }
+                )
+                FilterChip(
+                    selected = selectedProtocol == "DeepSeek",
+                    onClick = { onProtocolChange("DeepSeek") },
+                    label = { Text("DeepSeek") }
                 )
             }
             OutlinedTextField(
