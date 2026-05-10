@@ -128,10 +128,6 @@ class ChatSession internal constructor(
             )
         }) {
             ensureConfigValid(ctx.configSnapshot)
-            if (!ctx.hasStarted) {
-                ctx.hasStarted = true
-                ctx.onEvent(SessionEvent.RoundStarted(input = ctx.initialInput))
-            }
 
             val fullText = StringBuilder()
             val reasoningContent = StringBuilder()
@@ -153,6 +149,10 @@ class ChatSession internal constructor(
             val rawFlow = engine.stream(effectiveReq)
             val sseData = SseLineParser.parse(rawFlow)
             protocol.parseStream(sseData).collect { event ->
+                if (!ctx.hasStarted) {
+                    ctx.hasStarted = true
+                    ctx.onEvent(SessionEvent.RoundStarted(input = ctx.initialInput))
+                }
                 when (event) {
                     is ProtocolEvent.TextDelta -> {
                         fullText.append(event.text)

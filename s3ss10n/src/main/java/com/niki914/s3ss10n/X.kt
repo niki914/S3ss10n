@@ -22,12 +22,12 @@ internal fun xLog(str: String, t: Throwable) {
     Log.e("X", str, t)
 }
 
-internal inline fun <T> xTry(name: String, block: () -> T): T? = try {
+internal inline fun <T> xTry(name: String, log: Boolean = true, block: () -> T): T? = try {
     block()
 } catch (ce: CancellationException) {
     throw ce
 } catch (t: Throwable) {
-    xLog(tagFrom(name), "xTry($name) failed", t)
+    if (log) xLog(tagFrom(name), "xTry($name) failed", t)
     null
 }
 

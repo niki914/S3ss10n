@@ -11,7 +11,7 @@ android {
         applicationId = "com.niki914.demo"
         minSdk = 26
         targetSdk = 34
-        versionName = "1.9.9"
+        versionName = "1.9.9a"
         versionCode = 2
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -53,7 +53,8 @@ android {
 
 dependencies {
     implementation(project(":composebase"))
-    implementation("com.github.niki914:S3ss10n:1.9.9")
+//    implementation(project(":s3ss10n"))
+    implementation("com.github.niki914:s3ss10n:1.9.9a")
 
     // Radius
     implementation("com.github.Kyant0:Capsule:2.1.0")
