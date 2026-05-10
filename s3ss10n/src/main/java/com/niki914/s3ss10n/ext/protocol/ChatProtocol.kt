@@ -14,6 +14,12 @@ interface ChatProtocol {
     fun withCodec(codec: JsonCodec): ChatProtocol = this
 
     /**
+     * 返回该 protocol 从 apiKey 推导出的 auth HTTP headers。
+     * apiKey 为空时返回空 map。
+     */
+    fun useApiKey(apiKey: String): Map<String, String>
+
+    /**
      * tool call delta 的拼接由协议实现自行负责。
      */
     fun buildRequest(

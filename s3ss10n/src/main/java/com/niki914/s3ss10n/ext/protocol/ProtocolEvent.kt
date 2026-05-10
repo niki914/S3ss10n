@@ -7,6 +7,8 @@ sealed interface ProtocolEvent {
 
     data class ReasoningDelta(val text: String) : ProtocolEvent
 
+    data class ReasoningSignature(val signature: String) : ProtocolEvent
+
     data class ToolCallReady(
         val callId: String,
         val toolName: String,

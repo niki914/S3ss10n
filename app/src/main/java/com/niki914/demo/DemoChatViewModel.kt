@@ -22,6 +22,7 @@ data class DemoTurn(
 data class ChatState(
     val pairs: List<DemoTurn> = emptyList(),
     val isGenerating: Boolean = false,
+    val selectedProtocol: String = "OpenAI",
     val config: SessionConfig
 )
 
@@ -30,6 +31,7 @@ sealed interface ChatIntent {
     data class SetConfig(
         val block: (SessionConfig.() -> Unit)
     ) : ChatIntent
+    data class SetProtocol(val protocol: String) : ChatIntent
     data object NewRoom : ChatIntent
 }
 
@@ -57,14 +59,19 @@ class ChatViewModel
 
     override suspend fun handleIntent(intent: ChatIntent) {
         when (intent) {
+            is ChatIntent.SetProtocol -> {
+                updateState { copy(selectedProtocol = intent.protocol) }
+            }
+
             is ChatIntent.SetConfig -> {
                 intent.block(currentState.config)
-                session = Session.open<SessionProtocols.OpenAI> {
+                val configBlock: SessionConfig.Builder.() -> Unit = {
                     endpoint = currentState.config.endpoint
                     apiKey = currentState.config.apiKey
                     model = currentState.config.model
                     systemPrompt = currentState.config.systemPrompt
                     temperature = currentState.config.temperature
+                    maxTokens = currentState.config.maxTokens
 
                     hooks {
                         when (kind) {
@@ -96,6 +103,10 @@ class ChatViewModel
                             http { url = "http://127.0.0.1:51337/mcp" }
                         }
                     }
+                }
+                session = when (currentState.selectedProtocol) {
+                    "Anthropic" -> Session.open<SessionProtocols.Anthropic>(configBlock)
+                    else -> Session.open<SessionProtocols.OpenAI>(configBlock)
                 }
             }
 

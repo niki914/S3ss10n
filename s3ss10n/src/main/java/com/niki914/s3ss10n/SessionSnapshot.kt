@@ -14,7 +14,9 @@ data class SessionSnapshot(
     val appParams: Map<String, Any?>,
     val tools: ToolCatalog,
     val mcpServers: Map<String, McpServerConfig>,
-    val jsonCodec: JsonCodec
+    val jsonCodec: JsonCodec,
+    val headers: Map<String, String>,
+    val maxTokens: Int
 ) {
     fun mcpServer(name: String): McpServerConfig? = mcpServers[name]
 }

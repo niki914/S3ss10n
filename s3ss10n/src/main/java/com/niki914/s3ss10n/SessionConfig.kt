@@ -9,6 +9,7 @@ open class SessionConfig {
     var model: String = ""
     var systemPrompt: String? = null
     var temperature: Float = 0.7f
+    var maxTokens: Int = 4096
     var connectTimeoutSeconds: Long = 30
     var readTimeoutSeconds: Long = 60
     var writeTimeoutSeconds: Long = 30
@@ -29,6 +30,7 @@ open class SessionConfig {
     internal val localToolRegistry = LocalToolRegistryImpl()
     internal val mcpRegistry = McpRegistryImpl()
     internal val _appParams = mutableMapOf<String, Any?>()
+    internal val _headers = mutableMapOf<String, String>()
 
     fun hooks(block: suspend ToolCallRequest.() -> Message.Tool) {
         hooksBlock = block
@@ -44,6 +46,10 @@ open class SessionConfig {
 
     fun appParams(block: MutableMap<String, Any?>.() -> Unit) {
         _appParams.apply(block)
+    }
+
+    fun header(name: String, value: Any) {
+        _headers[name] = value.toString()
     }
 
     internal fun buildToolCatalog(
@@ -78,7 +84,9 @@ open class SessionConfig {
             appParams = appParamsSnapshot(),
             tools = buildToolCatalog(codec, discoveredMcpTools),
             mcpServers = mcpRegistry.servers.mapValues { (_, server) -> server.deepCopy() },
-            jsonCodec = codec
+            jsonCodec = codec,
+            headers = _headers.toMap(),
+            maxTokens = maxTokens
         )
     }
 
@@ -107,6 +115,9 @@ open class SessionConfig {
         target.localToolRegistry.copyFrom(localToolRegistry)
         target.mcpRegistry.copyFrom(mcpRegistry)
         target._appParams.putAll(_appParams)
+        target.maxTokens = maxTokens
+        target._headers.clear()
+        target._headers.putAll(_headers)
     }
 
     class Builder : SessionConfig() {

@@ -135,13 +135,22 @@ class ChatSession internal constructor(
 
             val fullText = StringBuilder()
             val reasoningContent = StringBuilder()
+            var reasoningSignature: String? = null
             val toolCalls = mutableListOf<ToolCallSpec>()
             val req = protocol.buildRequest(
                 snapshot = ctx.configSnapshot,
                 history = historyKeeper.snapshot(),
                 pendingUserInput = userInput
             )
-            val rawFlow = engine.stream(req)
+
+            // Merge auth headers from protocol with custom headers (custom takes precedence)
+            val authHeaders = protocol.useApiKey(ctx.configSnapshot.apiKey)
+            val mergedAuthAndCustom = mergeHeadersWithCustomOverride(
+                authHeaders, ctx.configSnapshot.headers
+            )
+            val effectiveReq = req.copy(headers = req.headers + mergedAuthAndCustom)
+
+            val rawFlow = engine.stream(effectiveReq)
             val sseData = SseLineParser.parse(rawFlow)
             protocol.parseStream(sseData).collect { event ->
                 when (event) {
@@ -158,6 +167,10 @@ class ChatSession internal constructor(
 
                     is ProtocolEvent.ReasoningDelta -> {
                         reasoningContent.append(event.text)
+                    }
+
+                    is ProtocolEvent.ReasoningSignature -> {
+                        reasoningSignature = event.signature
                     }
 
                     is ProtocolEvent.ToolCallReady -> {
@@ -191,7 +204,8 @@ class ChatSession internal constructor(
                 ChatTurn.Assistant(
                     content = fullText.toString(),
                     toolCalls = toolCalls.toList(),
-                    reasoningContent = reasoningContent.toString().ifEmpty { null }
+                    reasoningContent = reasoningContent.toString().ifEmpty { null },
+                    reasoningSignature = reasoningSignature
                 )
             )
 
@@ -377,6 +391,25 @@ class ChatSession internal constructor(
         if (snapshot.model.isBlank()) {
             throw ConfigInvalidException()
         }
+    }
+
+    /**
+     * Merge auth headers with custom headers. Custom headers take precedence
+     * over auth headers with the same name (case-insensitive key matching).
+     */
+    private fun mergeHeadersWithCustomOverride(
+        authHeaders: Map<String, String>,
+        customHeaders: Map<String, String>
+    ): Map<String, String> {
+        val result = LinkedHashMap<String, String>()
+        val customKeysLower = customHeaders.keys.mapTo(HashSet()) { it.lowercase() }
+        for ((key, value) in authHeaders) {
+            if (key.lowercase() !in customKeysLower) {
+                result[key] = value
+            }
+        }
+        result.putAll(customHeaders)
+        return result
     }
 
     private fun classifyStage(t: Throwable): SessionEvent.Stage {

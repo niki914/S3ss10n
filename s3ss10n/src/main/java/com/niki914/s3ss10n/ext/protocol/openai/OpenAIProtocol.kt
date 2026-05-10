@@ -22,6 +22,10 @@ class OpenAIProtocol(
         return OpenAIProtocol(codec)
     }
 
+    override fun useApiKey(apiKey: String): Map<String, String> {
+        return if (apiKey.isBlank()) emptyMap() else mapOf("Authorization" to "Bearer $apiKey")
+    }
+
     override fun buildRequest(
         snapshot: SessionSnapshot,
         history: List<ChatTurn>,
@@ -49,7 +53,6 @@ class OpenAIProtocol(
             method = "POST",
             url = snapshot.endpoint.trim(),
             headers = mapOf(
-                "Authorization" to "Bearer ${snapshot.apiKey}",
                 "Content-Type" to "application/json"
             ),
             body = bodyStr.toByteArray(Charsets.UTF_8),

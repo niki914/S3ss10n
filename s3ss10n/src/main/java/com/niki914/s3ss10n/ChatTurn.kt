@@ -9,7 +9,8 @@ sealed interface ChatTurn {
          * 为空表示本轮 assistant 只返回了文本，没有发起工具调用。
          */
         val toolCalls: List<ToolCallSpec> = emptyList(),
-        val reasoningContent: String? = null
+        val reasoningContent: String? = null,
+        val reasoningSignature: String? = null
     ) : ChatTurn
 
     data class ToolResult(

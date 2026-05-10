@@ -23,6 +23,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -68,6 +69,7 @@ fun DemoChatScreen(vm: ChatViewModel) {
     var apiKey by rememberSaveable { mutableStateOf("sk-xxx") }
     var model by rememberSaveable { mutableStateOf("deepseek-v4-flash") }
     var systemPrompt by rememberSaveable { mutableStateOf("") }
+    var selectedProtocol by rememberSaveable { mutableStateOf("Anthropic") }
 
     var input by rememberSaveable { mutableStateOf("") }
 
@@ -101,6 +103,7 @@ fun DemoChatScreen(vm: ChatViewModel) {
     }
 
     val applyConfig: () -> Unit = {
+        vm.sendIntent(ChatIntent.SetProtocol(selectedProtocol))
         vm.sendIntent(
             ChatIntent.SetConfig {
                 this.endpoint = endpoint
@@ -154,10 +157,18 @@ fun DemoChatScreen(vm: ChatViewModel) {
 
             if (showConfig) {
                 ConfigPanel(
+                    selectedProtocol = selectedProtocol,
                     endpoint = endpoint,
                     apiKey = apiKey,
                     model = model,
                     systemPrompt = systemPrompt,
+                    onProtocolChange = { protocol ->
+                        selectedProtocol = protocol
+                        endpoint = when (protocol) {
+                            "Anthropic" -> "https://api.anthropic.com/v1/messages"
+                            else -> "https://api.openai.com/v1/chat/completions"
+                        }
+                    },
                     onEndpointChange = { endpoint = it },
                     onApiKeyChange = { apiKey = it },
                     onModelChange = { model = it },
@@ -200,10 +211,12 @@ fun DemoChatScreen(vm: ChatViewModel) {
 
 @Composable
 private fun ConfigPanel(
+    selectedProtocol: String,
     endpoint: String,
     apiKey: String,
     model: String,
     systemPrompt: String,
+    onProtocolChange: (String) -> Unit,
     onEndpointChange: (String) -> Unit,
     onApiKeyChange: (String) -> Unit,
     onModelChange: (String) -> Unit,
@@ -227,10 +240,24 @@ private fun ConfigPanel(
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold
             )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                FilterChip(
+                    selected = selectedProtocol == "OpenAI",
+                    onClick = { onProtocolChange("OpenAI") },
+                    label = { Text("OpenAI") }
+                )
+                FilterChip(
+                    selected = selectedProtocol == "Anthropic",
+                    onClick = { onProtocolChange("Anthropic") },
+                    label = { Text("Anthropic") }
+                )
+            }
             OutlinedTextField(
                 value = endpoint,
                 onValueChange = onEndpointChange,
-                label = { Text("Endpoint") },
+                label = { Text("Endpoint ($selectedProtocol)") },
                 modifier = Modifier.fillMaxWidth()
             )
             OutlinedTextField(
