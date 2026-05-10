@@ -11,6 +11,13 @@ import com.niki914.s3ss10n.SessionProtocols
 import com.niki914.s3ss10n.ToolCallKind
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import java.util.UUID
+
+data class McpServerEntry(
+    val id: String = UUID.randomUUID().toString(),
+    val name: String,
+    val url: String
+)
 
 data class DemoTurn(
     val userMsg: String,
@@ -23,7 +30,8 @@ data class ChatState(
     val pairs: List<DemoTurn> = emptyList(),
     val isGenerating: Boolean = false,
     val selectedProtocol: String = "OpenAI",
-    val config: SessionConfig
+    val config: SessionConfig,
+    val mcpServers: List<McpServerEntry> = emptyList()
 )
 
 sealed interface ChatIntent {
@@ -32,6 +40,8 @@ sealed interface ChatIntent {
         val block: (SessionConfig.() -> Unit)
     ) : ChatIntent
     data class SetProtocol(val protocol: String) : ChatIntent
+    data class AddMcpServer(val name: String, val url: String) : ChatIntent
+    data class RemoveMcpServer(val id: String) : ChatIntent
     data object NewRoom : ChatIntent
 }
 
@@ -61,6 +71,18 @@ class ChatViewModel
         when (intent) {
             is ChatIntent.SetProtocol -> {
                 updateState { copy(selectedProtocol = intent.protocol) }
+            }
+
+            is ChatIntent.AddMcpServer -> {
+                updateState {
+                    copy(mcpServers = mcpServers + McpServerEntry(name = intent.name, url = intent.url))
+                }
+            }
+
+            is ChatIntent.RemoveMcpServer -> {
+                updateState {
+                    copy(mcpServers = mcpServers.filter { it.id != intent.id })
+                }
             }
 
             is ChatIntent.SetConfig -> {
@@ -99,8 +121,10 @@ class ChatViewModel
                     }
 
                     mcp {
-                        add("local_ide") {
-                            http { url = "http://127.0.0.1:51337/mcp" }
+                        currentState.mcpServers.forEach { server ->
+                            add(server.name) {
+                                http { url = server.url }
+                            }
                         }
                     }
                 }

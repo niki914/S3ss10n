@@ -11,7 +11,7 @@ android {
         applicationId = "com.niki914.demo"
         minSdk = 26
         targetSdk = 34
-        versionName = "1.9.9a"
+        versionName = "1.9.9a0"
         versionCode = 2
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -58,6 +58,9 @@ dependencies {
 
     // Radius
     implementation("com.github.Kyant0:Capsule:2.1.0")
+
+    // Backdrop (AndroidLiquidGlass)
+    implementation(libs.backdrop)
 
     // Navigation
     implementation(libs.androidx.navigation.compose)

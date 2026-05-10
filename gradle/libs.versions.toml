@@ -15,6 +15,7 @@ composeUiTooling = "1.4.0"
 composeUiToolingPreview = "1.8.3"
 # Other Libraries
 zephyr = "3.1.0"
+backdrop = "2.0.0-alpha03"
 
 [libraries]
 # AndroidX & Material
@@ -35,6 +36,8 @@ androidx-compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling
 zephyr-tools = { module = "com.github.niki914.Zephyr:tools", version.ref = "zephyr" }
 zephyr-provider = { module = "com.github.niki914.Zephyr:provider", version.ref = "zephyr" }
 zephyr-log = { module = "com.github.niki914.Zephyr:log", version.ref = "zephyr" }
+# Backdrop (AndroidLiquidGlass)
+backdrop = { module = "io.github.kyant0:backdrop", version.ref = "backdrop" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "androidGradlePlugin" }
