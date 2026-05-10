@@ -53,8 +53,8 @@ android {
 
 dependencies {
     implementation(project(":composebase"))
-//    implementation(project(":s3ss10n"))
-    implementation("com.github.niki914:s3ss10n:1.9.9a")
+    implementation(project(":s3ss10n"))
+//    implementation("com.github.niki914:s3ss10n:1.9.9a0")
 
     // Radius
     implementation("com.github.Kyant0:Capsule:2.1.0")
