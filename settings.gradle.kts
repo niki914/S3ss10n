@@ -29,7 +29,7 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "S3ss10n"
+rootProject.name = "s3ss10n"
 include(":app")
 include(":s3ss10n")
 include(":composebase")

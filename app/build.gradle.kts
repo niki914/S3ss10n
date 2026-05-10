@@ -53,11 +53,7 @@ android {
 
 dependencies {
     implementation(project(":composebase"))
-    implementation(project(":s3ss10n"))
-//    implementation(project(":tool-call"))
-//    implementation(project(":tool-call-base"))
-
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.github.niki914:S3ss10n:1.9.9")
 
     // Radius
     implementation("com.github.Kyant0:Capsule:2.1.0")
