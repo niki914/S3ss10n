@@ -11,8 +11,8 @@ android {
         applicationId = "com.niki914.demo"
         minSdk = 26
         targetSdk = 34
-        versionName = "1.0.0"
-        versionCode = 1
+        versionName = "1.9.9"
+        versionCode = 2
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         ndk {

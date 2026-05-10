@@ -3,18 +3,17 @@
 [中文文档](https://github.com/niki914/s3ss10n/blob/main/README_zh_CN.md)
 
 An Android streaming Chat Completions client based on OkHttp + SSE.
-It provides session-level history management, OpenAI-compatible tool calling, and MCP support.
+Supports OpenAI, Anthropic, and DeepSeek protocols. Provides session-level history management, tool calling, and MCP support.
 
 ## Demo
 
 This repository contains a runnable demo app:
 <https://github.com/niki914/s3ss10n/tree/main/app>
 
-[Demo.apk](https://github.com/niki914/s3ss10n/releases/latest)
-
 ## Features
 
-- Streaming output for OpenAI-compatible endpoints (SSE)
+- Multi-protocol support: OpenAI, Anthropic, DeepSeek
+- Streaming output via SSE
 - Session wrapper with automatic history (user/assistant/tool) and round state
 - Tool calling: merges streaming tool_call fragments and resumes the next round automatically
 - Local tool DSL with typed parameter schema
@@ -37,7 +36,7 @@ dependencyResolutionManagement {
 
 ```kotlin
 dependencies {
-    implementation("com.github.niki914:s3ss10n:1.0")
+    implementation("com.github.niki914:s3ss10n:1.9.9")
 }
 ```
 
@@ -70,6 +69,8 @@ Use whatever endpoint your server expects, as long as it accepts an OpenAI-compa
 Examples:
 
 - OpenAI: `https://api.openai.com/v1/chat/completions`
+- Anthropic: `https://api.anthropic.com/v1/messages`
+- DeepSeek: `https://api.deepseek.com/v1/chat/completions`
 - Ollama (OpenAI-compatible endpoint): `http://localhost:11434/v1/chat/completions`
 
 ## Tool Calling

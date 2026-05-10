@@ -1,14 +1,13 @@
 # s3ss10n
 
-一个面向 Android 的、基于 OkHttp + SSE 的流式 Chat Completions 客户端封装，提供会话级别的历史管理、OpenAI 兼容的 Tool Calling，以及 MCP 支持。
+一个面向 Android 的、基于 OkHttp + SSE 的流式 Chat Completions 客户端封装。支持 OpenAI、Anthropic、DeepSeek 协议，提供会话级别的历史管理、Tool Calling，以及 MCP 支持。
 
 Demo：本仓库包含一个可运行的 demo app，见 <https://github.com/niki914/s3ss10n/tree/main/app>
 
-Demo.apk：[Demo.apk](https://github.com/niki914/s3ss10n/releases/latest)
-
 ## 特性
 
-- 面向 OpenAI 兼容接口的流式输出（SSE）
+- 多协议支持：OpenAI、Anthropic、DeepSeek
+- 流式输出（SSE）
 - 会话封装：自动维护 history（user/assistant/tool），以及回合状态
 - Tool Calling：将流式分片的 tool_calls 合并为完整调用，并自动回传 tool 结果继续下一轮
 - 本地工具 DSL：带类型化参数 schema 声明
@@ -31,7 +30,7 @@ dependencyResolutionManagement {
 
 ```kotlin
 dependencies {
-    implementation("com.github.niki914:s3ss10n:1.0")
+    implementation("com.github.niki914:s3ss10n:1.9.9")
 }
 ```
 
@@ -63,6 +62,8 @@ session.send("Hello") { event ->
 示例：
 
 - OpenAI：`https://api.openai.com/v1/chat/completions`
+- Anthropic：`https://api.anthropic.com/v1/messages`
+- DeepSeek：`https://api.deepseek.com/v1/chat/completions`
 - Ollama（OpenAI 兼容 endpoint）：`http://localhost:11434/v1/chat/completions`
 
 ## Tool Calling
