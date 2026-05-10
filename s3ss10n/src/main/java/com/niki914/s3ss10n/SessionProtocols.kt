@@ -11,9 +11,12 @@ object SessionProtocols {
 
     object Anthropic : ChatProtocol by AnthropicProtocol()
 
+    object DeepSeek : ChatProtocol by OpenAIProtocol()
+
     init {
         runBlocking { ProtocolRegistry.register(OpenAI::class, OpenAI) }
         runBlocking { ProtocolRegistry.register(Anthropic::class, Anthropic) }
+        runBlocking { ProtocolRegistry.register(DeepSeek::class, DeepSeek) }
     }
 
     suspend fun ensureInitialized() = Unit

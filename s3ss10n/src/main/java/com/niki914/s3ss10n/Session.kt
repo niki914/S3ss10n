@@ -37,5 +37,10 @@ interface Session {
         suspend inline fun <reified P : ChatProtocol> open(
             noinline builder: SessionConfig.Builder.() -> Unit
         ): Session = open(P::class, builder)
+
+        @JvmName("openDefault")
+        suspend fun open(
+            builder: SessionConfig.Builder.() -> Unit
+        ): Session = open(SessionProtocols.OpenAI::class, builder)
     }
 }
