@@ -152,7 +152,7 @@ internal class HttpMcpClient(
         val initBody = jsonRpcRequest("initialize", mapOf(
             "protocolVersion" to "2025-06-18",
             "capabilities" to emptyMap<String, Any?>(),
-            "clientInfo" to mapOf("name" to "com.niki914.s3ss10n", "version" to "1.9.9a0")
+            "clientInfo" to mapOf("name" to "com.niki914.s3ss10n", "version" to "2.0.0")
         ))
         val initResponse = engine.unary(
             HttpRequest(
