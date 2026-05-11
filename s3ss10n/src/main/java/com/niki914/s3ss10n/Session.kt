@@ -7,7 +7,7 @@ import kotlin.reflect.KClass
 interface Session {
     suspend fun send(
         text: String,
-        onEvent: (SessionEvent) -> Unit = {}
+        onEvent: suspend (SessionEvent) -> Unit = {}
     )
 
     suspend fun getHistory(): List<ChatTurn>

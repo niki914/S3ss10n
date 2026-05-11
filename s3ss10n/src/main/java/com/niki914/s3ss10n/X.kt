@@ -55,7 +55,7 @@ internal suspend inline fun <T> xTrySuspend(name: String, crossinline block: sus
 
 internal suspend inline fun <T> xTrySuspend(
     name: String,
-    crossinline onError: (Throwable) -> T,
+    crossinline onError: suspend (Throwable) -> T,
     crossinline block: suspend () -> T
 ): T = try {
     block()

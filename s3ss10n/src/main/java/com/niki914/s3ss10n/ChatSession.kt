@@ -49,13 +49,13 @@ class ChatSession internal constructor(
 
     private class RoundContext(
         val configSnapshot: SessionSnapshot,
-        val onEvent: (SessionEvent) -> Unit,
+        val onEvent: suspend (SessionEvent) -> Unit,
         val initialInput: String,
         val textAccumulator: StringBuilder = StringBuilder(),
         var hasStarted: Boolean = false
     )
 
-    override suspend fun send(text: String, onEvent: (SessionEvent) -> Unit) {
+    override suspend fun send(text: String, onEvent: suspend (SessionEvent) -> Unit) {
         val config = thisConfig()
         scheduleDiscovery(config)
         val ctx = RoundContext(
