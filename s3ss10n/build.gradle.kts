@@ -45,14 +45,6 @@ afterEvaluate {
 
 dependencies {
     implementation("com.google.code.gson:gson:2.11.0")
-
-    implementation(kotlin("reflect"))
-
-    // Material & AndroidX
-    implementation(libs.google.material)
-    implementation(libs.androidx.annotation)
-    implementation(libs.androidx.activity.compose)
-
-    // Net
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 }

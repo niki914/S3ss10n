@@ -1,12 +1,10 @@
 package com.niki914.s3ss10n.ext.protocol.anthropic
 
-import androidx.annotation.Keep
 
 /**
  * Request body for the Anthropic Messages API.
  * All non-null and non-default fields are serialized by Gson.
  */
-@Keep
 internal data class AnthropicRequestBody(
     val model: String,
     val messages: List<AnthropicMessage>,
@@ -22,7 +20,6 @@ internal data class AnthropicRequestBody(
  * content is always a list of content blocks (Anthropic accepts
  * both plain strings and arrays; we always use arrays for consistency).
  */
-@Keep
 internal data class AnthropicMessage(
     val role: String,
     val content: List<AnthropicContentBlock>
@@ -37,7 +34,6 @@ internal data class AnthropicMessage(
  * - "tool_use":   id, name, input
  * - "tool_result": tool_use_id, content
  */
-@Keep
 internal data class AnthropicContentBlock(
     val type: String,
     val text: String? = null,
@@ -54,7 +50,6 @@ internal data class AnthropicContentBlock(
  * A tool definition in the Anthropic tool format.
  * Flat structure — no function wrapper like OpenAI.
  */
-@Keep
 internal data class AnthropicToolDef(
     val name: String,
     val description: String,
