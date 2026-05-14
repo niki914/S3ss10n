@@ -42,7 +42,7 @@ dependencies {
 
 ## Quick Start
 
-The main entry is `Session`. Create one with `Session.open`, send messages with `send`, and observe events via the callback.
+The main entry is `Session`. Create one with `Session.open`, send messages with `send`, and observe events via either the callback overload or the `Flow` overload.
 
 ```kotlin
 val session = Session.open<SessionProtocols.OpenAI> {
@@ -53,6 +53,17 @@ val session = Session.open<SessionProtocols.OpenAI> {
 }
 
 session.send("Hello") { event ->
+    when (event) {
+        is SessionEvent.TextDelta -> print(event.delta)
+        is SessionEvent.RoundCompleted -> println("\nDone: ${event.fullText}")
+        is SessionEvent.Error -> println("Error: ${event.message}")
+        else -> Unit
+    }
+}
+```
+
+```kotlin
+session.send("Hello").collect { event ->
     when (event) {
         is SessionEvent.TextDelta -> print(event.delta)
         is SessionEvent.RoundCompleted -> println("\nDone: ${event.fullText}")
@@ -159,7 +170,8 @@ MCP tools are auto-discovered from the server. Use `call.kind` (`ToolCallKind.Lo
 
 ```kotlin
 interface Session {
-    suspend fun send(text: String, onEvent: (SessionEvent) -> Unit = {})
+    suspend fun send(text: String, onEvent: suspend (SessionEvent) -> Unit)
+    fun send(text: String): Flow<SessionEvent>
     suspend fun update(block: SessionConfig.Builder.() -> Unit)
     suspend fun getHistory(): List<ChatTurn>
     suspend fun resetConversation()
@@ -167,7 +179,8 @@ interface Session {
 }
 ```
 
-- `send`: start a new user round. Events arrive via `onEvent`.
+- `send(text, onEvent)`: start a new user round. Events arrive via `onEvent`.
+- `send(text)`: returns a cold `Flow<SessionEvent>`. The round starts when collected.
 - `update`: change config for future rounds. Running rounds are not interrupted.
 - `getHistory`: returns the conversation history (`ChatTurn.User`, `ChatTurn.Assistant`, `ChatTurn.ToolResult`).
 - `resetConversation`: clear history. Use when switching model, MCP servers, or starting a new conversation.

@@ -36,7 +36,7 @@ dependencies {
 
 ## 快速开始
 
-核心入口是 `Session`。用 `Session.open` 创建，用 `send` 发送消息，通过事件回调观察结果。
+核心入口是 `Session`。用 `Session.open` 创建，用 `send` 发送消息，可通过回调重载或 `Flow` 重载观察事件。
 
 ```kotlin
 val session = Session.open<SessionProtocols.OpenAI> {
@@ -47,6 +47,17 @@ val session = Session.open<SessionProtocols.OpenAI> {
 }
 
 session.send("Hello") { event ->
+    when (event) {
+        is SessionEvent.TextDelta -> print(event.delta)
+        is SessionEvent.RoundCompleted -> println("\nDone: ${event.fullText}")
+        is SessionEvent.Error -> println("Error: ${event.message}")
+        else -> Unit
+    }
+}
+```
+
+```kotlin
+session.send("Hello").collect { event ->
     when (event) {
         is SessionEvent.TextDelta -> print(event.delta)
         is SessionEvent.RoundCompleted -> println("\nDone: ${event.fullText}")
@@ -152,7 +163,8 @@ MCP 工具会自动从服务端发现。可通过 `call.kind`（`ToolCallKind.Lo
 
 ```kotlin
 interface Session {
-    suspend fun send(text: String, onEvent: (SessionEvent) -> Unit = {})
+    suspend fun send(text: String, onEvent: suspend (SessionEvent) -> Unit)
+    fun send(text: String): Flow<SessionEvent>
     suspend fun update(block: SessionConfig.Builder.() -> Unit)
     suspend fun getHistory(): List<ChatTurn>
     suspend fun resetConversation()
@@ -160,7 +172,8 @@ interface Session {
 }
 ```
 
-- `send`：发起一轮新的用户输入，事件通过 `onEvent` 回调
+- `send(text, onEvent)`：发起一轮新的用户输入，事件通过 `onEvent` 回调
+- `send(text)`：返回冷 `Flow<SessionEvent>`，开始 `collect` 时才会真正发起这一轮
 - `update`：更新后续轮次使用的配置，不影响正在运行的轮次
 - `getHistory`：返回对话历史（`ChatTurn.User`、`ChatTurn.Assistant`、`ChatTurn.ToolResult`）
 - `resetConversation`：清空历史，通常在切换模型、MCP 或新建对话时调用

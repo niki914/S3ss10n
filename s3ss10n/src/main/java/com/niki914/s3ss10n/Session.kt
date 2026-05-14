@@ -2,13 +2,19 @@ package com.niki914.s3ss10n
 
 import com.niki914.s3ss10n.ext.protocol.ChatProtocol
 import com.niki914.s3ss10n.ext.protocol.ProtocolRegistry
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import kotlin.reflect.KClass
 
 interface Session {
     suspend fun send(
         text: String,
-        onEvent: suspend (SessionEvent) -> Unit = {}
+        onEvent: suspend (SessionEvent) -> Unit
     )
+
+    fun send(text: String): Flow<SessionEvent> = flow {
+        send(text) { emit(it) }
+    }
 
     suspend fun getHistory(): List<ChatTurn>
 
