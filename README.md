@@ -166,6 +166,24 @@ val session = Session.open<SessionProtocols.OpenAI> {
 
 MCP tools are auto-discovered from the server. Use `call.kind` (`ToolCallKind.Local` / `ToolCallKind.Mcp(serverName)`) to route differently.
 
+Discovery remains asynchronous by default. `open()`, `update()`, and `send()` may trigger background discovery, but they do not block the current round.
+If you need MCP tools to be available on the first request right after changing MCP config, call `refreshMcpTools()` explicitly:
+
+```kotlin
+session.update {
+    mcp {
+        add("aslocate") {
+            http { url = "http://127.0.0.1:51338/mcp" }
+        }
+    }
+}
+
+val result = session.refreshMcpTools()
+session.send("Find the definition of this class")
+```
+
+`refreshMcpTools()` waits for `initialize + tools/list` to finish for the currently enabled MCP servers, keeps the old cache on failure, and returns `McpRefreshResult` so you can inspect partial success.
+
 ## Session API
 
 ```kotlin
@@ -173,6 +191,7 @@ interface Session {
     suspend fun send(text: String, onEvent: suspend (SessionEvent) -> Unit)
     fun send(text: String): Flow<SessionEvent>
     suspend fun update(block: SessionConfig.Builder.() -> Unit)
+    suspend fun refreshMcpTools(): McpRefreshResult
     suspend fun getHistory(): List<ChatTurn>
     suspend fun resetConversation()
     suspend fun close()
@@ -182,6 +201,7 @@ interface Session {
 - `send(text, onEvent)`: start a new user round. Events arrive via `onEvent`.
 - `send(text)`: returns a cold `Flow<SessionEvent>`. The round starts when collected.
 - `update`: change config for future rounds. Running rounds are not interrupted.
+- `refreshMcpTools`: synchronously refresh MCP discovery for the currently enabled servers. Use this when you need the latest MCP tools to be visible to the next `send()`.
 - `getHistory`: returns the conversation history (`ChatTurn.User`, `ChatTurn.Assistant`, `ChatTurn.ToolResult`).
 - `resetConversation`: clear history. Use when switching model, MCP servers, or starting a new conversation.
 - `close`: release session resources.

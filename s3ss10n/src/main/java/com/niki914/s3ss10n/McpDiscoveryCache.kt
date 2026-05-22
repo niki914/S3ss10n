@@ -1,5 +1,8 @@
 package com.niki914.s3ss10n
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -11,7 +14,7 @@ internal data class McpDiscoveredTool(
 
 internal class McpDiscoveryCache {
     private val cache = mutableMapOf<CacheKey, List<McpDiscoveredTool>>()
-    private val refreshing = mutableSetOf<CacheKey>()
+    private val inFlight = mutableMapOf<CacheKey, Deferred<*>>()
     private val mutex = Mutex()
 
     suspend fun snapshot(serverName: String, fingerprint: String): List<McpDiscoveredTool>? = mutex.withLock {
@@ -22,12 +25,32 @@ internal class McpDiscoveryCache {
         cache[CacheKey(serverName, fingerprint)] = tools
     }
 
-    suspend fun markRefreshing(serverName: String, fingerprint: String): Boolean = mutex.withLock {
-        refreshing.add(CacheKey(serverName, fingerprint))
+    suspend fun <T> acquireRefresh(
+        serverName: String,
+        fingerprint: String,
+        scope: CoroutineScope,
+        block: suspend () -> T
+    ): Pair<Deferred<T>, Boolean> = mutex.withLock {
+        val key = CacheKey(serverName, fingerprint)
+        @Suppress("UNCHECKED_CAST")
+        val existing = inFlight[key] as? Deferred<T>
+        if (existing != null && existing.isActive) {
+            existing to false
+        } else {
+            if (existing != null) {
+                inFlight.remove(key)
+            }
+            val deferred = scope.async { block() }
+            inFlight[key] = deferred
+            deferred to true
+        }
     }
 
-    suspend fun markFinished(serverName: String, fingerprint: String) = mutex.withLock {
-        refreshing.remove(CacheKey(serverName, fingerprint))
+    suspend fun clearRefresh(serverName: String, fingerprint: String, deferred: Deferred<*>) = mutex.withLock {
+        val key = CacheKey(serverName, fingerprint)
+        if (inFlight[key] === deferred) {
+            inFlight.remove(key)
+        }
     }
 
     private data class CacheKey(
