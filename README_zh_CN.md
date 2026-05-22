@@ -159,6 +159,24 @@ val session = Session.open<SessionProtocols.OpenAI> {
 
 MCP 工具会自动从服务端发现。可通过 `call.kind`（`ToolCallKind.Local` / `ToolCallKind.Mcp(serverName)`）做分流。
 
+默认情况下，discovery 仍然是异步自动触发的。`open()`、`update()`、`send()` 可能会在后台触发 discovery，但不会阻塞当前轮次。
+如果你在更新 MCP 配置后希望下一次 `send()` 首轮就能看到最新工具，请显式调用 `refreshMcpTools()`：
+
+```kotlin
+session.update {
+    mcp {
+        add("aslocate") {
+            http { url = "http://127.0.0.1:51338/mcp" }
+        }
+    }
+}
+
+val result = session.refreshMcpTools()
+session.send("帮我定位这个类的定义")
+```
+
+`refreshMcpTools()` 会对当前已启用的 MCP server 等待 `initialize + tools/list` 完成；若某个 server 刷新失败，会保留旧缓存，并通过 `McpRefreshResult` 返回部分成功/失败信息。
+
 ## Session API
 
 ```kotlin
@@ -166,6 +184,7 @@ interface Session {
     suspend fun send(text: String, onEvent: suspend (SessionEvent) -> Unit)
     fun send(text: String): Flow<SessionEvent>
     suspend fun update(block: SessionConfig.Builder.() -> Unit)
+    suspend fun refreshMcpTools(): McpRefreshResult
     suspend fun getHistory(): List<ChatTurn>
     suspend fun resetConversation()
     suspend fun close()
@@ -175,6 +194,7 @@ interface Session {
 - `send(text, onEvent)`：发起一轮新的用户输入，事件通过 `onEvent` 回调
 - `send(text)`：返回冷 `Flow<SessionEvent>`，开始 `collect` 时才会真正发起这一轮
 - `update`：更新后续轮次使用的配置，不影响正在运行的轮次
+- `refreshMcpTools`：同步刷新当前已启用 MCP server 的 discovery；当你需要保证下一次 `send()` 可见最新 MCP tools 时使用
 - `getHistory`：返回对话历史（`ChatTurn.User`、`ChatTurn.Assistant`、`ChatTurn.ToolResult`）
 - `resetConversation`：清空历史，通常在切换模型、MCP 或新建对话时调用
 - `close`：释放会话资源

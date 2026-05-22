@@ -24,6 +24,8 @@ interface Session {
 
     suspend fun update(block: SessionConfig.Builder.() -> Unit)
 
+    suspend fun refreshMcpTools(): McpRefreshResult
+
     companion object {
         suspend fun <P : ChatProtocol> open(
             protocolClass: KClass<P>,
