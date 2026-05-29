@@ -55,8 +55,14 @@ class ChatSession internal constructor(
         val onEvent: suspend (SessionEvent) -> Unit,
         val initialInput: String,
         val textAccumulator: StringBuilder = StringBuilder(),
-        var hasStarted: Boolean = false
+        var hasStarted: Boolean = false,
+        var hasCompleted: Boolean = false,
+        var hasError: Boolean = false
     )
+
+    private class RoundEventCallbackException(
+        val original: Throwable
+    ) : RuntimeException(original)
 
     private data class ServerDiscoveryOutcome(
         val serverName: String,
@@ -163,13 +169,20 @@ class ChatSession internal constructor(
 
     private suspend fun doRound(ctx: RoundContext, userInput: String?) {
         xTrySuspend("ChatSession.doRound", onError = { t ->
-            ctx.onEvent(
-                SessionEvent.Error(
-                    stage = classifyStage(t),
-                    message = t.message ?: "Round failed",
-                    cause = t
+            if (t is RoundEventCallbackException) {
+                throw t.original
+            }
+            unwrapRoundEventCallbackException {
+                emitRoundError(
+                    ctx,
+                    SessionEvent.Error(
+                        stage = classifyStage(t),
+                        message = t.message ?: "Round failed",
+                        cause = t
+                    )
                 )
-            )
+                finishRoundIfStarted(ctx)
+            }
         }) {
             ensureConfigValid(ctx.configSnapshot)
 
@@ -193,15 +206,13 @@ class ChatSession internal constructor(
             val rawFlow = engine.stream(effectiveReq)
             val sseData = SseLineParser.parse(rawFlow)
             protocol.parseStream(sseData).collect { event ->
-                if (!ctx.hasStarted) {
-                    ctx.hasStarted = true
-                    ctx.onEvent(SessionEvent.RoundStarted(input = ctx.initialInput))
-                }
+                startRoundIfNeeded(ctx)
                 when (event) {
                     is ProtocolEvent.TextDelta -> {
                         fullText.append(event.text)
                         ctx.textAccumulator.append(event.text)
-                        ctx.onEvent(
+                        emitRoundEvent(
+                            ctx,
                             SessionEvent.TextDelta(
                                 delta = event.text,
                                 fullText = ctx.textAccumulator.toString()
@@ -228,7 +239,8 @@ class ChatSession internal constructor(
                     }
 
                     is ProtocolEvent.Error -> {
-                        ctx.onEvent(
+                        emitRoundError(
+                            ctx,
                             SessionEvent.Error(
                                 stage = event.stage,
                                 message = event.cause.message ?: "Protocol error",
@@ -241,28 +253,101 @@ class ChatSession internal constructor(
                 }
             }
 
-            if (userInput != null) {
-                historyKeeper.add(ChatTurn.User(userInput))
-            }
-            historyKeeper.add(
-                ChatTurn.Assistant(
-                    content = fullText.toString(),
-                    toolCalls = toolCalls.toList(),
-                    reasoningContent = reasoningContent.toString().ifEmpty { null },
-                    reasoningSignature = reasoningSignature
-                )
+            val committed = commitRoundTurnsIfValid(
+                ctx = ctx,
+                userInput = userInput,
+                assistantContent = fullText.toString(),
+                toolCalls = toolCalls.toList(),
+                reasoningContent = reasoningContent.toString().ifEmpty { null },
+                reasoningSignature = reasoningSignature
             )
+            if (!committed) {
+                finishRoundIfStarted(ctx)
+                return@xTrySuspend
+            }
 
             if (!toolCallWaiter.isEmpty()) {
                 responseToolCalls(ctx)
             } else {
-                ctx.onEvent(
-                    SessionEvent.RoundCompleted(
-                        fullText = ctx.textAccumulator.toString()
+                finishRoundIfStarted(ctx)
+            }
+        }
+    }
+
+    private suspend fun startRoundIfNeeded(ctx: RoundContext) {
+        if (ctx.hasStarted) return
+        emitRoundEvent(ctx, SessionEvent.RoundStarted(input = ctx.initialInput))
+        ctx.hasStarted = true
+    }
+
+    private suspend fun finishRoundIfStarted(ctx: RoundContext) {
+        if (!ctx.hasStarted || ctx.hasCompleted) return
+        emitRoundEvent(
+            ctx,
+            SessionEvent.RoundCompleted(
+                fullText = ctx.textAccumulator.toString()
+            )
+        )
+        ctx.hasCompleted = true
+    }
+
+    private suspend fun emitRoundError(ctx: RoundContext, event: SessionEvent.Error) {
+        ctx.hasError = true
+        emitRoundEvent(ctx, event)
+    }
+
+    private suspend fun emitRoundEvent(ctx: RoundContext, event: SessionEvent) {
+        try {
+            ctx.onEvent(event)
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (t: Throwable) {
+            throw RoundEventCallbackException(t)
+        }
+    }
+
+    private suspend fun unwrapRoundEventCallbackException(block: suspend () -> Unit) {
+        try {
+            block()
+        } catch (e: RoundEventCallbackException) {
+            throw e.original
+        }
+    }
+
+    private suspend fun commitRoundTurnsIfValid(
+        ctx: RoundContext,
+        userInput: String?,
+        assistantContent: String,
+        toolCalls: List<ToolCallSpec>,
+        reasoningContent: String?,
+        reasoningSignature: String?
+    ): Boolean {
+        val hasAssistantPayload = assistantContent.isNotBlank() || toolCalls.isNotEmpty()
+        if (!hasAssistantPayload) {
+            if (!ctx.hasError) {
+                emitRoundError(
+                    ctx,
+                    SessionEvent.Error(
+                        stage = SessionEvent.Stage.Parse,
+                        message = "Empty assistant response"
                     )
                 )
             }
+            return false
         }
+
+        if (userInput != null) {
+            historyKeeper.add(ChatTurn.User(userInput))
+        }
+        historyKeeper.add(
+            ChatTurn.Assistant(
+                content = assistantContent,
+                toolCalls = toolCalls,
+                reasoningContent = reasoningContent,
+                reasoningSignature = reasoningSignature
+            )
+        )
+        return true
     }
 
     private suspend fun responseToolCalls(ctx: RoundContext) {
@@ -282,7 +367,8 @@ class ChatSession internal constructor(
     private suspend fun handleToolCall(toolCall: ToolCallSpec, ctx: RoundContext): Message.Tool {
         if (ctx.configSnapshot.tools.find(toolCall.toolName) == null) {
             val resultJson = jsonCodec.encode(mapOf("error" to "Unknown tool '${toolCall.toolName}'"))
-            ctx.onEvent(
+            emitRoundEvent(
+                ctx,
                 SessionEvent.ToolFailed(
                     callId = toolCall.callId,
                     toolName = toolCall.toolName,
@@ -291,7 +377,8 @@ class ChatSession internal constructor(
                     resultJson = resultJson
                 )
             )
-            ctx.onEvent(
+            emitRoundError(
+                ctx,
                 SessionEvent.Error(
                     stage = SessionEvent.Stage.Tool,
                     message = "Unknown tool '${toolCall.toolName}'"
@@ -304,7 +391,8 @@ class ChatSession internal constructor(
             )
         }
         val request = buildToolCallRequest(toolCall, ctx.configSnapshot)
-        ctx.onEvent(
+        emitRoundEvent(
+            ctx,
             SessionEvent.ToolRunning(
                 callId = request.id,
                 toolName = request.name,
@@ -314,7 +402,8 @@ class ChatSession internal constructor(
 
         val hooks = ctx.configSnapshot.hooksBlock
         if (hooks == null && request is LocalToolCallRequest) {
-            ctx.onEvent(
+            emitRoundEvent(
+                ctx,
                 SessionEvent.ToolFailed(
                     callId = request.id,
                     toolName = request.name,
@@ -323,7 +412,8 @@ class ChatSession internal constructor(
                     resultJson = null
                 )
             )
-            ctx.onEvent(
+            emitRoundError(
+                ctx,
                 SessionEvent.Error(
                     stage = SessionEvent.Stage.Tool,
                     message = "no hooks configured"
@@ -333,7 +423,11 @@ class ChatSession internal constructor(
         }
 
         val toolMsg = xTrySuspend("ChatSession.handleToolCall", onError = { t ->
-            ctx.onEvent(
+            if (t is RoundEventCallbackException) {
+                throw t
+            }
+            emitRoundEvent(
+                ctx,
                 SessionEvent.ToolFailed(
                     callId = request.id,
                     toolName = request.name,
@@ -342,7 +436,8 @@ class ChatSession internal constructor(
                     resultJson = null
                 )
             )
-            ctx.onEvent(
+            emitRoundError(
+                ctx,
                 SessionEvent.Error(
                     stage = SessionEvent.Stage.Tool,
                     message = t.message ?: "hooks threw exception",
@@ -363,7 +458,8 @@ class ChatSession internal constructor(
             is McpToolCallRequest -> request.lastOutcome
         }) {
             is ToolCallOutcome.Success -> {
-                ctx.onEvent(
+                emitRoundEvent(
+                    ctx,
                     SessionEvent.ToolSucceeded(
                         callId = request.id,
                         toolName = request.name,
@@ -374,7 +470,8 @@ class ChatSession internal constructor(
             }
 
             is ToolCallOutcome.Failure -> {
-                ctx.onEvent(
+                emitRoundEvent(
+                    ctx,
                     SessionEvent.ToolFailed(
                         callId = request.id,
                         toolName = request.name,
@@ -383,7 +480,8 @@ class ChatSession internal constructor(
                         resultJson = outcome.resultJson
                     )
                 )
-                ctx.onEvent(
+                emitRoundError(
+                    ctx,
                     SessionEvent.Error(
                         stage = SessionEvent.Stage.Tool,
                         message = outcome.errorMessage
@@ -392,7 +490,8 @@ class ChatSession internal constructor(
             }
 
             null -> {
-                ctx.onEvent(
+                emitRoundEvent(
+                    ctx,
                     SessionEvent.ToolFailed(
                         callId = request.id,
                         toolName = request.name,
