@@ -34,6 +34,7 @@ class ChatSession internal constructor(
 
     private suspend fun thisConfig(): SessionConfig = configMutex.withLock { _config }
     private val mcpClient: McpClient = HttpMcpClient(engine = engine, codec = jsonCodec)
+    private val toolCallCoordinator = ToolCallCoordinator(mcpClient = mcpClient, codec = jsonCodec)
     private val scope = CoroutineScope(SupervisorJob())
     private val mcpDiscoveryCoordinator = McpDiscoveryCoordinator(
         mcpClient = mcpClient,
@@ -45,7 +46,9 @@ class ChatSession internal constructor(
     private val chatMutex = Mutex()
     private val historyKeeper = HistoryKeeper()
     private val toolCallWaiter = ToolCallWaiter<RoundContext>(scope) { toolCall, ctx ->
-        handleToolCall(toolCall, ctx)
+        toolCallCoordinator.handle(toolCall, ctx.configSnapshot) { event ->
+            emitCoordinatorEvent(ctx, event)
+        }
     }
 
     init {
@@ -284,6 +287,14 @@ class ChatSession internal constructor(
         emitRoundEvent(ctx, event)
     }
 
+    private suspend fun emitCoordinatorEvent(ctx: RoundContext, event: SessionEvent) {
+        if (event is SessionEvent.Error) {
+            emitRoundError(ctx, event)
+        } else {
+            emitRoundEvent(ctx, event)
+        }
+    }
+
     private suspend fun emitRoundEvent(ctx: RoundContext, event: SessionEvent) {
         try {
             ctx.onEvent(event)
@@ -350,169 +361,6 @@ class ChatSession internal constructor(
             )
         }
         doRound(ctx, null)
-    }
-
-    private suspend fun handleToolCall(toolCall: ToolCallSpec, ctx: RoundContext): Message.Tool {
-        if (ctx.configSnapshot.tools.find(toolCall.toolName) == null) {
-            val resultJson = jsonCodec.encode(mapOf("error" to "Unknown tool '${toolCall.toolName}'"))
-            emitRoundEvent(
-                ctx,
-                SessionEvent.ToolFailed(
-                    callId = toolCall.callId,
-                    toolName = toolCall.toolName,
-                    kind = ToolCallKind.Local,
-                    message = "Unknown tool '${toolCall.toolName}'",
-                    resultJson = resultJson
-                )
-            )
-            emitRoundError(
-                ctx,
-                SessionEvent.Error(
-                    stage = SessionEvent.Stage.Tool,
-                    message = "Unknown tool '${toolCall.toolName}'"
-                )
-            )
-            return Message.Tool(
-                callId = toolCall.callId,
-                toolName = toolCall.toolName,
-                contentJson = resultJson
-            )
-        }
-        val request = buildToolCallRequest(toolCall, ctx.configSnapshot)
-        emitRoundEvent(
-            ctx,
-            SessionEvent.ToolRunning(
-                callId = request.id,
-                toolName = request.name,
-                kind = request.kind
-            )
-        )
-
-        val hooks = ctx.configSnapshot.hooksBlock
-        if (hooks == null && request is LocalToolCallRequest) {
-            emitRoundEvent(
-                ctx,
-                SessionEvent.ToolFailed(
-                    callId = request.id,
-                    toolName = request.name,
-                    kind = request.kind,
-                    message = "No hooks configured",
-                    resultJson = null
-                )
-            )
-            emitRoundError(
-                ctx,
-                SessionEvent.Error(
-                    stage = SessionEvent.Stage.Tool,
-                    message = "no hooks configured"
-                )
-            )
-            return request.error("No hooks configured")
-        }
-
-        val toolMsg = xTrySuspend("ChatSession.handleToolCall", onError = { t ->
-            if (t is RoundEventCallbackException) {
-                throw t
-            }
-            emitRoundEvent(
-                ctx,
-                SessionEvent.ToolFailed(
-                    callId = request.id,
-                    toolName = request.name,
-                    kind = request.kind,
-                    message = t.message ?: "hooks threw exception",
-                    resultJson = null
-                )
-            )
-            emitRoundError(
-                ctx,
-                SessionEvent.Error(
-                    stage = SessionEvent.Stage.Tool,
-                    message = t.message ?: "hooks threw exception",
-                    cause = t
-                )
-            )
-            request.error(t.message ?: "hooks threw exception")
-        }) {
-            if (hooks != null) {
-                request.hooks()
-            } else {
-                request.delegate()
-            }
-        }
-
-        when (val outcome = when (request) {
-            is LocalToolCallRequest -> request.lastOutcome
-            is McpToolCallRequest -> request.lastOutcome
-        }) {
-            is ToolCallOutcome.Success -> {
-                emitRoundEvent(
-                    ctx,
-                    SessionEvent.ToolSucceeded(
-                        callId = request.id,
-                        toolName = request.name,
-                        kind = request.kind,
-                        resultJson = outcome.resultJson
-                    )
-                )
-            }
-
-            is ToolCallOutcome.Failure -> {
-                emitRoundEvent(
-                    ctx,
-                    SessionEvent.ToolFailed(
-                        callId = request.id,
-                        toolName = request.name,
-                        kind = request.kind,
-                        message = outcome.errorMessage,
-                        resultJson = outcome.resultJson
-                    )
-                )
-                emitRoundError(
-                    ctx,
-                    SessionEvent.Error(
-                        stage = SessionEvent.Stage.Tool,
-                        message = outcome.errorMessage
-                    )
-                )
-            }
-
-            null -> {
-                emitRoundEvent(
-                    ctx,
-                    SessionEvent.ToolFailed(
-                        callId = request.id,
-                        toolName = request.name,
-                        kind = request.kind,
-                        message = "No outcome recorded",
-                        resultJson = toolMsg.contentJson
-                    )
-                )
-            }
-        }
-        return toolMsg
-    }
-
-    private fun buildToolCallRequest(toolCall: ToolCallSpec, snap: SessionSnapshot): ToolCallRequest {
-        val descriptor = snap.tools.find(toolCall.toolName)
-        return when (val kind = descriptor?.kind) {
-            ToolCallKind.Local -> LocalToolCallRequest(
-                toolCall = toolCall,
-                appParams = snap.appParams,
-                codec = jsonCodec
-            )
-
-            is ToolCallKind.Mcp -> McpToolCallRequest(
-                toolCall = toolCall,
-                serverName = kind.serverName,
-                appParams = snap.appParams,
-                server = snap.mcpServer(kind.serverName),
-                mcpClient = mcpClient,
-                codec = jsonCodec
-            )
-
-            null -> error("Unknown tool '${toolCall.toolName}'")
-        }
     }
 
     private fun ensureConfigValid(snapshot: SessionSnapshot) {

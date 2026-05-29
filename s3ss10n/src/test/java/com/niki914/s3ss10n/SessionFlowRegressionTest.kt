@@ -3,6 +3,7 @@ package com.niki914.s3ss10n
 import com.niki914.s3ss10n.ext.json.GsonJsonCodec
 import com.niki914.s3ss10n.ext.protocol.ProtocolEvent
 import com.niki914.s3ss10n.json.JsonCodec
+import com.niki914.s3ss10n.net.HttpTimeouts
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
@@ -394,6 +395,218 @@ class SessionFlowRegressionTest {
     }
 
     @Test
+    fun `本地 hook 返回 failure outcome 发出 ToolFailed 和 Error`() = runBlocking {
+        val protocol = singleToolThenTextProtocol(toolName = "lookup")
+        val session = newChatSession(protocol = protocol, engine = FakeHttpEngine()) {
+            registerLookupTool()
+            hooks {
+                error("hook failed", """{"reason":"bad"}""")
+            }
+        }
+
+        try {
+            val events = session.send("hi").toList()
+            val toolResult = protocol.lastHistory.last() as ChatTurn.ToolResult
+
+            assertEquals(
+                listOf(
+                    SessionEvent.ToolRunning(
+                        callId = "call-1",
+                        toolName = "lookup",
+                        kind = ToolCallKind.Local
+                    ),
+                    SessionEvent.ToolFailed(
+                        callId = "call-1",
+                        toolName = "lookup",
+                        kind = ToolCallKind.Local,
+                        message = "hook failed",
+                        resultJson = toolResult.resultJson
+                    ),
+                    SessionEvent.Error(
+                        stage = SessionEvent.Stage.Tool,
+                        message = "hook failed"
+                    )
+                ),
+                events.filter {
+                    it is SessionEvent.ToolRunning ||
+                        it is SessionEvent.ToolFailed ||
+                        it is SessionEvent.Error
+                }
+            )
+            assertEquals("lookup", toolResult.toolName)
+            assertTrue(toolResult.resultJson.contains("hook failed"))
+            assertTrue(toolResult.resultJson.contains("reason"))
+            assertTrue(toolResult.resultJson.contains("bad"))
+        } finally {
+            session.close()
+        }
+    }
+
+    @Test
+    fun `MCP 工具成功发出 ToolSucceeded 且结果进入下一轮`() = runBlocking {
+        val engine = FakeMcpHttpEngine(
+            toolsByUrl = mapOf("https://mcp.ok" to listOf(remoteSearchTool())),
+            toolCallResultsByUrl = mapOf("https://mcp.ok" to """{"answer":"remote-ok"}""")
+        )
+        val protocol = singleToolThenTextProtocol(
+            toolName = "remote_search",
+            argumentsJson = """{"query":"hi"}"""
+        )
+        val session = newChatSession(protocol = protocol, engine = engine) {
+            registerDocsMcpServer()
+        }
+
+        try {
+            session.refreshMcpTools()
+            val events = session.send("hi").toList()
+
+            assertTrue(engine.unaryCalls.any { it == "https://mcp.ok" to "tools/call" })
+            assertEquals(
+                SessionEvent.ToolRunning(
+                    callId = "call-1",
+                    toolName = "remote_search",
+                    kind = ToolCallKind.Mcp("docs")
+                ),
+                events.filterIsInstance<SessionEvent.ToolRunning>().single()
+            )
+            assertEquals(
+                SessionEvent.ToolSucceeded(
+                    callId = "call-1",
+                    toolName = "remote_search",
+                    kind = ToolCallKind.Mcp("docs"),
+                    resultJson = """{"answer":"remote-ok"}"""
+                ),
+                events.filterIsInstance<SessionEvent.ToolSucceeded>().single()
+            )
+            assertEquals(
+                ChatTurn.ToolResult(
+                    callId = "call-1",
+                    toolName = "remote_search",
+                    resultJson = """{"answer":"remote-ok"}"""
+                ),
+                protocol.lastHistory.last()
+            )
+        } finally {
+            session.close()
+        }
+    }
+
+    @Test
+    fun `MCP 工具失败发出 ToolFailed 和 Error 且返回 tool error JSON`() = runBlocking {
+        val engine = FakeMcpHttpEngine(
+            toolsByUrl = mapOf("https://mcp.ok" to listOf(remoteSearchTool())),
+            toolCallFailuresByUrl = mapOf("https://mcp.ok" to IllegalStateException("mcp boom"))
+        )
+        val protocol = singleToolThenTextProtocol(
+            toolName = "remote_search",
+            argumentsJson = """{"query":"hi"}"""
+        )
+        val session = newChatSession(protocol = protocol, engine = engine) {
+            registerDocsMcpServer()
+        }
+
+        try {
+            session.refreshMcpTools()
+            val events = session.send("hi").toList()
+            val failed = events.filterIsInstance<SessionEvent.ToolFailed>().single()
+            val error = events.filterIsInstance<SessionEvent.Error>().single()
+            val toolResult = protocol.lastHistory.last() as ChatTurn.ToolResult
+
+            assertTrue(engine.unaryCalls.any { it == "https://mcp.ok" to "tools/call" })
+            assertEquals(ToolCallKind.Mcp("docs"), failed.kind)
+            assertEquals("remote_search", failed.toolName)
+            assertEquals("mcp boom", failed.message)
+            assertEquals(toolResult.resultJson, failed.resultJson)
+            assertEquals(SessionEvent.Stage.Tool, error.stage)
+            assertEquals("mcp boom", error.message)
+            assertTrue(toolResult.resultJson.contains("mcp boom"))
+        } finally {
+            session.close()
+        }
+    }
+
+    @Test
+    fun `MCP server 缺失时 coordinator 发出 ToolFailed 和 Error`() = runBlocking {
+        val codec = GsonJsonCodec()
+        val coordinator = ToolCallCoordinator(
+            mcpClient = object : McpClient {
+                override suspend fun call(
+                    server: McpServerConfig,
+                    toolName: String,
+                    argumentsJson: String
+                ): String = error("server-null path should not call MCP client")
+
+                override suspend fun listTools(server: McpServerConfig): List<McpDiscoveredTool> {
+                    error("server-null path should not list MCP tools")
+                }
+            },
+            codec = codec
+        )
+        val snapshot = SessionSnapshot(
+            endpoint = "https://example.com/chat",
+            apiKey = "",
+            model = "test-model",
+            systemPrompt = null,
+            temperature = 0.7f,
+            timeouts = HttpTimeouts(connectMs = 1_000, readMs = 1_000, writeMs = 1_000),
+            hooksBlock = null,
+            appParams = emptyMap(),
+            tools = ToolCatalog(
+                descriptors = listOf(
+                    ToolDescriptor(
+                        name = "remote_search",
+                        description = "search docs",
+                        inputSchema = mapOf("type" to "object"),
+                        kind = ToolCallKind.Mcp("docs")
+                    )
+                )
+            ),
+            mcpServers = emptyMap(),
+            jsonCodec = codec,
+            headers = emptyMap(),
+            maxTokens = 4096
+        )
+        val events = mutableListOf<SessionEvent>()
+
+        val message = coordinator.handle(
+            toolCall = ToolCallSpec(
+                callId = "call-1",
+                toolName = "remote_search",
+                argumentsJson = """{"query":"hi"}"""
+            ),
+            snapshot = snapshot
+        ) { event ->
+            events += event
+        }
+        val errorJson = codec.decodeMap(message.contentJson).orEmpty()
+
+        assertEquals("call-1", message.callId)
+        assertEquals("remote_search", message.toolName)
+        assertEquals(
+            listOf(
+                SessionEvent.ToolRunning(
+                    callId = "call-1",
+                    toolName = "remote_search",
+                    kind = ToolCallKind.Mcp("docs")
+                ),
+                SessionEvent.ToolFailed(
+                    callId = "call-1",
+                    toolName = "remote_search",
+                    kind = ToolCallKind.Mcp("docs"),
+                    message = "MCP server 'docs' is not configured",
+                    resultJson = message.contentJson
+                ),
+                SessionEvent.Error(
+                    stage = SessionEvent.Stage.Tool,
+                    message = "MCP server 'docs' is not configured"
+                )
+            ),
+            events
+        )
+        assertEquals("MCP server 'docs' is not configured", errorJson["error"])
+    }
+
+    @Test
     fun `多个工具调用结果按调用顺序写入 history 后进入下一轮`() = runBlocking {
         var parseCount = 0
         val protocol = RecordingChatProtocol {
@@ -713,6 +926,22 @@ class SessionFlowRegressionTest {
                 string("query") { required = false }
             }
         }
+    }
+
+    private fun SessionConfig.registerDocsMcpServer() {
+        mcp {
+            add("docs") {
+                http { url = "https://mcp.ok" }
+            }
+        }
+    }
+
+    private fun remoteSearchTool(): McpDiscoveredTool {
+        return McpDiscoveredTool(
+            name = "remote_search",
+            description = "search docs",
+            inputSchema = mapOf("type" to "object")
+        )
     }
 
     private fun throwingJsonCodec(): JsonCodec {

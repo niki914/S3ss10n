@@ -87,6 +87,8 @@ internal class FakeHttpEngine(
 internal class FakeMcpHttpEngine(
     private val toolsByUrl: Map<String, List<McpDiscoveredTool>>,
     failuresByUrl: Map<String, Throwable> = emptyMap(),
+    private val toolCallResultsByUrl: Map<String, String> = emptyMap(),
+    private val toolCallFailuresByUrl: Map<String, Throwable> = emptyMap(),
     private val codec: JsonCodec = GsonJsonCodec()
 ) : HttpEngine {
     val unaryCalls = mutableListOf<Pair<String, String>>()
@@ -128,6 +130,24 @@ internal class FakeMcpHttpEngine(
                                     "inputSchema" to tool.inputSchema
                                 )
                             }
+                        )
+                    )
+                )
+            }
+
+            "tools/call" -> {
+                toolCallFailuresByUrl[request.url]?.let { throw it }
+                val resultJson = toolCallResultsByUrl[request.url]
+                    ?: error("Unexpected tools/call request: ${request.url}")
+                codec.encode(
+                    mapOf(
+                        "result" to mapOf(
+                            "content" to listOf(
+                                mapOf(
+                                    "type" to "text",
+                                    "text" to resultJson
+                                )
+                            )
                         )
                     )
                 )
