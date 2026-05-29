@@ -184,6 +184,34 @@ session.send("Find the definition of this class")
 
 `refreshMcpTools()` waits for `initialize + tools/list` to finish for the currently enabled MCP servers, keeps the old cache on failure, and returns `McpRefreshResult` so you can inspect partial success.
 
+### 4) Check MCP discovery status
+
+For most apps, the most useful MCP status API is the query-style snapshot:
+
+```kotlin
+val snapshot = session.getMcpDiscoverySnapshot()
+
+val ide = snapshot.servers["aslocate"]
+when (ide?.state) {
+    McpDiscoveryState.Discovering -> showStatus("MCP tools are loading")
+    McpDiscoveryState.Available -> showStatus("MCP tools are ready")
+    McpDiscoveryState.UsingStaleCache -> showStatus("Using cached MCP tools")
+    McpDiscoveryState.Failed -> showStatus("MCP unavailable: ${ide.errorMessage}")
+    McpDiscoveryState.Idle, null -> showStatus("MCP discovery has not started")
+}
+```
+
+`getMcpDiscoverySnapshot()` is read-only and does not start network discovery. It is intended for UI badges, logs, and runtime prompts. Each server snapshot includes:
+
+- `state`: `Idle`, `Discovering`, `Available`, `Failed`, or `UsingStaleCache`
+- `errorMessage`: the latest discovery failure message, if any
+- `lastSuccessAtMillis`: the last successful `tools/list` timestamp
+- `discoveredToolCount`: the number of currently known tools
+- `stale`: whether the tools come from a previous successful cache
+
+The same snapshot also exposes `finalToolRegistry`, which is useful for diagnostics when local tools and MCP tools have name conflicts.
+If you need lifecycle callbacks for persisting your own cache, use `mcpHooks { ... }`; most callers can start with `getMcpDiscoverySnapshot()` and add hooks only when they need persistence.
+
 ## Session API
 
 ```kotlin
@@ -192,6 +220,7 @@ interface Session {
     fun send(text: String): Flow<SessionEvent>
     suspend fun update(block: SessionConfig.Builder.() -> Unit)
     suspend fun refreshMcpTools(): McpRefreshResult
+    suspend fun getMcpDiscoverySnapshot(): McpDiscoverySnapshot
     suspend fun getHistory(): List<ChatTurn>
     suspend fun resetConversation()
     suspend fun close()
@@ -202,6 +231,7 @@ interface Session {
 - `send(text)`: returns a cold `Flow<SessionEvent>`. The round starts when collected.
 - `update`: change config for future rounds. Running rounds are not interrupted.
 - `refreshMcpTools`: synchronously refresh MCP discovery for the currently enabled servers. Use this when you need the latest MCP tools to be visible to the next `send()`.
+- `getMcpDiscoverySnapshot`: read the current MCP discovery status and final tool registry diagnostics without starting network discovery.
 - `getHistory`: returns the conversation history (`ChatTurn.User`, `ChatTurn.Assistant`, `ChatTurn.ToolResult`).
 - `resetConversation`: clear history. Use when switching model, MCP servers, or starting a new conversation.
 - `close`: release session resources.

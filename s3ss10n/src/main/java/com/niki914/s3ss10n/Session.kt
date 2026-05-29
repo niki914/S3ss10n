@@ -26,6 +26,13 @@ interface Session {
 
     suspend fun refreshMcpTools(): McpRefreshResult
 
+    suspend fun getMcpDiscoverySnapshot(): McpDiscoverySnapshot {
+        return McpDiscoverySnapshot(
+            servers = emptyMap(),
+            finalToolRegistry = ToolRegistrySnapshot.Empty
+        )
+    }
+
     companion object {
         suspend fun <P : ChatProtocol> open(
             protocolClass: KClass<P>,

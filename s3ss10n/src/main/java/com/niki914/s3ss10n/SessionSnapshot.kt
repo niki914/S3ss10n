@@ -29,7 +29,8 @@ data class ToolDescriptor(
 )
 
 data class ToolCatalog(
-    val descriptors: List<ToolDescriptor>
+    val descriptors: List<ToolDescriptor>,
+    val registrySnapshot: ToolRegistrySnapshot = ToolRegistrySnapshot.Empty
 ) {
     private val byName = descriptors.associateBy { it.name }
 

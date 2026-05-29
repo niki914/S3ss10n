@@ -27,6 +27,7 @@ open class SessionConfig {
     var httpEngine: com.niki914.s3ss10n.net.HttpEngine? = null
 
     internal var hooksBlock: (suspend ToolCallRequest.() -> Message.Tool)? = null
+    internal var mcpHooksBlock: McpHooks? = null
     internal val localToolRegistry = LocalToolRegistryImpl()
     internal val mcpRegistry = McpRegistryImpl()
     internal val _appParams = mutableMapOf<String, Any?>()
@@ -44,6 +45,10 @@ open class SessionConfig {
         mcpRegistry.apply(block)
     }
 
+    fun mcpHooks(block: McpHooks.() -> Unit) {
+        mcpHooksBlock = (mcpHooksBlock ?: McpHooks()).apply(block)
+    }
+
     fun appParams(block: MutableMap<String, Any?>.() -> Unit) {
         _appParams.apply(block)
     }
@@ -54,12 +59,18 @@ open class SessionConfig {
 
     internal fun buildToolCatalog(
         codec: JsonCodec,
-        discoveredMcpTools: Map<String, List<McpDiscoveredTool>> = emptyMap()
+        discoveredMcpTools: Map<String, List<McpDiscoveredTool>> = emptyMap(),
+        resolver: ToolRegistryResolver = ToolRegistryResolver()
     ): ToolCatalog {
         val localDescriptors = localToolRegistry.toToolDescriptors(codec)
-        val mcpDescriptors = mcpRegistry.toToolDescriptors(codec, discoveredMcpTools)
+        val mcpCandidates = mcpRegistry.toToolCandidates(codec, discoveredMcpTools)
+        val resolution = resolver.resolve(
+            localTools = localDescriptors,
+            mcpServers = mcpCandidates
+        )
         return ToolCatalog(
-            descriptors = localDescriptors + mcpDescriptors
+            descriptors = resolution.descriptors,
+            registrySnapshot = resolution.snapshot
         )
     }
 
@@ -112,6 +123,7 @@ open class SessionConfig {
         target.jsonCodec = jsonCodec
         target.httpEngine = httpEngine
         target.hooksBlock = hooksBlock
+        target.mcpHooksBlock = mcpHooksBlock?.deepCopy()
         target.localToolRegistry.copyFrom(localToolRegistry)
         target.mcpRegistry.copyFrom(mcpRegistry)
         target._appParams.putAll(_appParams)

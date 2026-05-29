@@ -177,6 +177,34 @@ session.send("帮我定位这个类的定义")
 
 `refreshMcpTools()` 会对当前已启用的 MCP server 等待 `initialize + tools/list` 完成；若某个 server 刷新失败，会保留旧缓存，并通过 `McpRefreshResult` 返回部分成功/失败信息。
 
+### 4) 查看 MCP discovery 状态
+
+对大多数应用来说，最常用的 MCP 状态 API 是查询式快照：
+
+```kotlin
+val snapshot = session.getMcpDiscoverySnapshot()
+
+val ide = snapshot.servers["aslocate"]
+when (ide?.state) {
+    McpDiscoveryState.Discovering -> showStatus("MCP 工具加载中")
+    McpDiscoveryState.Available -> showStatus("MCP 工具可用")
+    McpDiscoveryState.UsingStaleCache -> showStatus("正在使用缓存的 MCP 工具")
+    McpDiscoveryState.Failed -> showStatus("MCP 不可用：${ide.errorMessage}")
+    McpDiscoveryState.Idle, null -> showStatus("MCP discovery 尚未开始")
+}
+```
+
+`getMcpDiscoverySnapshot()` 是只读查询，不会触发网络 discovery。它适合用于 UI 状态、日志和运行时 prompt。每个 server snapshot 包含：
+
+- `state`：`Idle`、`Discovering`、`Available`、`Failed` 或 `UsingStaleCache`
+- `errorMessage`：最近一次 discovery 失败信息
+- `lastSuccessAtMillis`：最近一次 `tools/list` 成功时间
+- `discoveredToolCount`：当前已知工具数量
+- `stale`：当前工具是否来自上一次成功缓存
+
+同一个 snapshot 还包含 `finalToolRegistry`，用于诊断本地工具和 MCP 工具的重名冲突。
+如果你需要把 discovery 结果写入自己的业务缓存，可以再使用 `mcpHooks { ... }`；多数调用方建议先从 `getMcpDiscoverySnapshot()` 开始。
+
 ## Session API
 
 ```kotlin
@@ -185,6 +213,7 @@ interface Session {
     fun send(text: String): Flow<SessionEvent>
     suspend fun update(block: SessionConfig.Builder.() -> Unit)
     suspend fun refreshMcpTools(): McpRefreshResult
+    suspend fun getMcpDiscoverySnapshot(): McpDiscoverySnapshot
     suspend fun getHistory(): List<ChatTurn>
     suspend fun resetConversation()
     suspend fun close()
@@ -195,6 +224,7 @@ interface Session {
 - `send(text)`：返回冷 `Flow<SessionEvent>`，开始 `collect` 时才会真正发起这一轮
 - `update`：更新后续轮次使用的配置，不影响正在运行的轮次
 - `refreshMcpTools`：同步刷新当前已启用 MCP server 的 discovery；当你需要保证下一次 `send()` 可见最新 MCP tools 时使用
+- `getMcpDiscoverySnapshot`：只读查询当前 MCP discovery 状态和最终 tool registry 诊断，不触发网络 discovery
 - `getHistory`：返回对话历史（`ChatTurn.User`、`ChatTurn.Assistant`、`ChatTurn.ToolResult`）
 - `resetConversation`：清空历史，通常在切换模型、MCP 或新建对话时调用
 - `close`：释放会话资源

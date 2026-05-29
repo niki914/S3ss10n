@@ -106,4 +106,35 @@ internal class McpRegistryImpl : McpRegistry {
                 discoveredDescriptors + explicit
             }
         }
+
+    internal fun toToolCandidates(
+        codec: com.niki914.s3ss10n.json.JsonCodec,
+        discoveredTools: Map<String, List<McpDiscoveredTool>> = emptyMap()
+    ): List<McpServerToolCandidates> =
+        _servers.mapNotNull { (serverName, server) ->
+            if (!server.enabled) {
+                null
+            } else {
+                val explicit = server.tools.map { (toolName, toolConfig) ->
+                    toolConfig.toToolDescriptor(
+                        toolName = toolName,
+                        kind = ToolCallKind.Mcp(serverName),
+                        codec = codec
+                    )
+                }
+                val discovered = discoveredTools[serverName].orEmpty().map { tool ->
+                    ToolDescriptor(
+                        name = tool.name,
+                        description = tool.description,
+                        inputSchema = tool.inputSchema,
+                        kind = ToolCallKind.Mcp(serverName)
+                    )
+                }
+                McpServerToolCandidates(
+                    serverName = serverName,
+                    discovered = discovered,
+                    explicit = explicit
+                )
+            }
+        }
 }

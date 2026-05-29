@@ -103,6 +103,35 @@ class ChatSession internal constructor(
         return refreshEnabledServers(config = thisConfig(), refreshCached = true)
     }
 
+    override suspend fun getMcpDiscoverySnapshot(): McpDiscoverySnapshot {
+        val config = thisConfig()
+        val servers = config.mcpRegistry.servers.mapValues { (serverName, server) ->
+            val fingerprint = server.discoveryFingerprint(serverName)
+            mcpDiscoveryCache.stateSnapshot(
+                serverName = serverName,
+                fingerprint = fingerprint,
+                enabled = server.enabled
+            ) ?: McpServerDiscoverySnapshot(
+                serverName = serverName,
+                enabled = server.enabled,
+                fingerprint = fingerprint,
+                state = McpDiscoveryState.Idle,
+                errorMessage = null,
+                lastSuccessAtMillis = null,
+                discoveredToolCount = 0,
+                stale = false
+            )
+        }
+        val finalToolRegistry = config.buildToolCatalog(
+            codec = jsonCodec,
+            discoveredMcpTools = discoveredToolsSnapshot(config)
+        ).registrySnapshot
+        return McpDiscoverySnapshot(
+            servers = servers,
+            finalToolRegistry = finalToolRegistry
+        )
+    }
+
     override suspend fun getHistory(): List<ChatTurn> {
         return historyKeeper.snapshot().filterNot { it is ChatTurn.System }
     }
@@ -536,14 +565,29 @@ class ChatSession internal constructor(
         fingerprint: String,
         serverConfig: McpServerConfig
     ): ServerDiscoveryOutcome {
+        val discoveringSnapshot = mcpDiscoveryCache.markDiscovering(
+            serverName = serverName,
+            fingerprint = fingerprint,
+            nowMillis = System.currentTimeMillis()
+        )
+        notifyDiscoveryStateChanged(serverName, discoveringSnapshot)
         return xTrySuspend(
             "ChatSession.runServerDiscovery",
             onError = { t ->
+                val message = t.message ?: "MCP discovery failed"
+                val (failureSnapshot, policy) = mcpDiscoveryCache.commitFailure(
+                    serverName = serverName,
+                    fingerprint = fingerprint,
+                    message = message,
+                    nowMillis = System.currentTimeMillis()
+                )
+                notifyDiscoveryStateChanged(serverName, failureSnapshot)
+                notifyDiscoveryFailed(serverName, t, policy)
                 ServerDiscoveryOutcome(
                     serverName = serverName,
                     fingerprint = fingerprint,
                     tools = null,
-                    failureMessage = t.message ?: "MCP discovery failed",
+                    failureMessage = message,
                     cacheCommitted = false
                 )
             }
@@ -553,7 +597,14 @@ class ChatSession internal constructor(
             if (latestServer?.enabled == true &&
                 latestServer.discoveryFingerprint(serverName) == fingerprint
             ) {
-                mcpDiscoveryCache.put(serverName, fingerprint, tools)
+                val successSnapshot = mcpDiscoveryCache.commitSuccess(
+                    serverName = serverName,
+                    fingerprint = fingerprint,
+                    tools = tools,
+                    nowMillis = System.currentTimeMillis()
+                )
+                notifyDiscoveryStateChanged(serverName, successSnapshot)
+                notifyToolsDiscovered(serverName, tools)
                 ServerDiscoveryOutcome(
                     serverName = serverName,
                     fingerprint = fingerprint,
@@ -562,14 +613,58 @@ class ChatSession internal constructor(
                     cacheCommitted = true
                 )
             } else {
+                val message = "MCP discovery ignored because config changed"
+                val failureSnapshot = mcpDiscoveryCache.commitIgnoredBecauseConfigChanged(
+                    serverName = serverName,
+                    fingerprint = fingerprint,
+                    message = message,
+                    nowMillis = System.currentTimeMillis()
+                )
+                notifyDiscoveryStateChanged(serverName, failureSnapshot)
+                notifyDiscoveryFailed(
+                    serverName = serverName,
+                    error = IllegalStateException(message),
+                    policy = McpCachePolicy.IgnoredBecauseConfigChanged
+                )
                 ServerDiscoveryOutcome(
                     serverName = serverName,
                     fingerprint = fingerprint,
                     tools = null,
-                    failureMessage = "MCP discovery ignored because config changed",
+                    failureMessage = message,
                     cacheCommitted = false
                 )
             }
+        }
+    }
+
+    private suspend fun notifyToolsDiscovered(
+        serverName: String,
+        tools: List<McpDiscoveredTool>
+    ) {
+        val hook = thisConfig().mcpHooksBlock?.onToolsDiscovered ?: return
+        xTrySuspend("ChatSession.notifyToolsDiscovered") {
+            hook(serverName, tools)
+        }
+    }
+
+    private suspend fun notifyDiscoveryFailed(
+        serverName: String,
+        error: Throwable,
+        policy: McpCachePolicy
+    ) {
+        val hook = thisConfig().mcpHooksBlock?.onDiscoveryFailed ?: return
+        xTrySuspend("ChatSession.notifyDiscoveryFailed") {
+            hook(serverName, error, policy)
+        }
+    }
+
+    private suspend fun notifyDiscoveryStateChanged(
+        serverName: String,
+        snapshot: McpServerDiscoverySnapshot
+    ) {
+        val hook = thisConfig().mcpHooksBlock?.onDiscoveryStateChanged ?: return
+        xTrySuspend("ChatSession.notifyDiscoveryStateChanged") {
+            hook(serverName, snapshot)
         }
     }
 
