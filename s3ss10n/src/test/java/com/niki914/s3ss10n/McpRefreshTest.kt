@@ -136,6 +136,57 @@ class McpRefreshTest {
     }
 
     @Test
+    fun `refreshMcpTools 失败时沿用 stale cache 中的已发现工具`() = runBlocking {
+        val engine = FakeMcpHttpEngine(
+            toolsByUrl = mapOf(
+                "https://mcp.ok" to listOf(
+                    McpDiscoveredTool(
+                        name = "remote_search",
+                        description = "search docs",
+                        inputSchema = mapOf("type" to "object")
+                    )
+                )
+            )
+        )
+        val protocol = RecordingChatProtocol { flowOf(ProtocolEvent.Completed) }
+        val session = newChatSession(protocol = protocol, engine = engine) {
+            mcp {
+                add("docs") {
+                    http { url = "https://mcp.ok" }
+                }
+            }
+        }
+
+        try {
+            val firstResult = session.refreshMcpTools()
+            val firstServer = session.getMcpDiscoverySnapshot().servers.getValue("docs")
+
+            assertTrue(firstResult.isSuccess)
+            assertEquals(McpDiscoveryState.Available, firstServer.state)
+            assertEquals(1, firstServer.discoveredToolCount)
+
+            engine.failuresByUrl["https://mcp.ok"] = IllegalStateException("boom")
+
+            val secondResult = session.refreshMcpTools()
+            val staleServer = session.getMcpDiscoverySnapshot().servers.getValue("docs")
+
+            assertFalse(secondResult.isSuccess)
+            assertEquals("docs", secondResult.failedServers.single().serverName)
+            assertEquals(McpDiscoveryState.UsingStaleCache, staleServer.state)
+            assertTrue(staleServer.stale)
+            assertEquals(1, staleServer.discoveredToolCount)
+
+            session.send("hello") { }
+
+            val tool = protocol.lastSnapshot?.tools?.find("remote_search")
+            assertNotNull(tool)
+            assertEquals(ToolCallKind.Mcp("docs"), tool?.kind)
+        } finally {
+            session.close()
+        }
+    }
+
+    @Test
     fun `refreshMcpTools 失败后 discovery snapshot 记录 error`() = runBlocking {
         val engine = FakeMcpHttpEngine(
             toolsByUrl = emptyMap(),

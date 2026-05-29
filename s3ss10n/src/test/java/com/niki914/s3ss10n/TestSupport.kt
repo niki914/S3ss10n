@@ -14,8 +14,12 @@ internal class RecordingChatProtocol(
     private val parseHandler: (Flow<String>) -> Flow<ProtocolEvent>
 ) : ChatProtocol {
     var lastSnapshot: SessionSnapshot? = null
+    var lastHistory: List<ChatTurn> = emptyList()
+    var lastPendingUserInput: String? = null
+    var lastRequest: HttpRequest? = null
+    var apiKeyHeaders: Map<String, String> = emptyMap()
 
-    override fun useApiKey(apiKey: String): Map<String, String> = emptyMap()
+    override fun useApiKey(apiKey: String): Map<String, String> = apiKeyHeaders
 
     override fun buildRequest(
         snapshot: SessionSnapshot,
@@ -23,7 +27,9 @@ internal class RecordingChatProtocol(
         pendingUserInput: String?
     ): HttpRequest {
         lastSnapshot = snapshot
-        return HttpRequest(
+        lastHistory = history
+        lastPendingUserInput = pendingUserInput
+        val request = HttpRequest(
             method = "POST",
             url = snapshot.endpoint,
             headers = emptyMap(),
@@ -34,6 +40,8 @@ internal class RecordingChatProtocol(
                 writeMs = 1_000
             )
         )
+        lastRequest = request
+        return request
     }
 
     override fun parseStream(rawSseLines: Flow<String>): Flow<ProtocolEvent> = parseHandler(rawSseLines)
@@ -59,6 +67,7 @@ internal class FakeHttpEngine(
 ) : HttpEngine {
     val streamRequests = mutableListOf<HttpRequest>()
     val unaryRequests = mutableListOf<HttpRequest>()
+    var closed: Boolean = false
 
     override fun stream(request: HttpRequest): Flow<String> {
         streamRequests += request
@@ -70,15 +79,18 @@ internal class FakeHttpEngine(
         return unaryHandler(request)
     }
 
-    override fun close() = Unit
+    override fun close() {
+        closed = true
+    }
 }
 
 internal class FakeMcpHttpEngine(
     private val toolsByUrl: Map<String, List<McpDiscoveredTool>>,
-    private val failuresByUrl: Map<String, Throwable> = emptyMap(),
+    failuresByUrl: Map<String, Throwable> = emptyMap(),
     private val codec: JsonCodec = GsonJsonCodec()
 ) : HttpEngine {
     val unaryCalls = mutableListOf<Pair<String, String>>()
+    val failuresByUrl: MutableMap<String, Throwable> = failuresByUrl.toMutableMap()
 
     override fun stream(request: HttpRequest): Flow<String> = emptyFlow()
 

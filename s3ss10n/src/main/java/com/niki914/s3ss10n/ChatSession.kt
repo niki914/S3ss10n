@@ -13,6 +13,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -83,7 +84,7 @@ class ChatSession internal constructor(
             onEvent,
             text
         )
-        runRound(ctx, text).join()
+        awaitRound(runRound(ctx, text))
     }
 
     override suspend fun update(block: SessionConfig.Builder.() -> Unit) {
@@ -152,12 +153,30 @@ class ChatSession internal constructor(
         engine.close()
     }
 
-    private fun runRound(ctx: RoundContext, userInput: String?) = scope.launch {
-        chatMutex.withLock {
+    private fun runRound(ctx: RoundContext, userInput: String?) = scope.async {
+        val roundJob = chatMutex.withLock {
             cleanUpCurrWork()
-            currJob = launch {
+            scope.async {
                 doRound(ctx, userInput)
-            }
+            }.also { currJob = it }
+        }
+        roundJob.await()
+    }
+
+    private suspend fun awaitRound(round: Deferred<Unit>) {
+        try {
+            round.await()
+        } catch (t: Throwable) {
+            throw t.unwrapRecoveredCoroutineException()
+        }
+    }
+
+    private fun Throwable.unwrapRecoveredCoroutineException(): Throwable {
+        val original = cause ?: return this
+        return if (this::class == original::class && message == original.message) {
+            original
+        } else {
+            this
         }
     }
 
