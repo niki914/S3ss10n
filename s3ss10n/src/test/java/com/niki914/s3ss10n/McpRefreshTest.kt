@@ -2,6 +2,7 @@ package com.niki914.s3ss10n
 
 import com.niki914.s3ss10n.ext.protocol.ProtocolEvent
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.flowOf
@@ -469,8 +470,8 @@ class McpRefreshTest {
 
         try {
             toolsListStarted.await()
-            val first = async { session.refreshMcpTools() }
-            val second = async { session.refreshMcpTools() }
+            val first = async(start = CoroutineStart.UNDISPATCHED) { session.refreshMcpTools() }
+            val second = async(start = CoroutineStart.UNDISPATCHED) { session.refreshMcpTools() }
             releaseToolsList.complete(Unit)
             val results = listOf(first, second).awaitAll()
 

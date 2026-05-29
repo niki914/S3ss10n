@@ -78,6 +78,75 @@ class SessionFlowRegressionTest {
     }
 
     @Test
+    fun `reasoning delta 和 signature 写入 assistant history`() = runBlocking {
+        val protocol = RecordingChatProtocol {
+            flowOf(
+                ProtocolEvent.ReasoningDelta("why"),
+                ProtocolEvent.ReasoningSignature("sig"),
+                ProtocolEvent.TextDelta("answer"),
+                ProtocolEvent.Completed
+            )
+        }
+        val session = newChatSession(protocol = protocol, engine = FakeHttpEngine())
+
+        try {
+            val events = session.send("hi").toList()
+            val assistant = session.getHistory().filterIsInstance<ChatTurn.Assistant>().single()
+
+            assertEquals(SessionEvent.RoundCompleted(fullText = "answer"), events.last())
+            assertEquals("answer", assistant.content)
+            assertEquals("why", assistant.reasoningContent)
+            assertEquals("sig", assistant.reasoningSignature)
+        } finally {
+            session.close()
+        }
+    }
+
+    @Test
+    fun `配置错误发生在 round started 前且不发 complete`() = runBlocking {
+        val protocol = RecordingChatProtocol {
+            flowOf(ProtocolEvent.TextDelta("should not run"))
+        }
+        val session = newChatSession(protocol = protocol, engine = FakeHttpEngine()) {
+            endpoint = "invalid-endpoint"
+        }
+
+        try {
+            val events = session.send("hi").toList()
+            val error = events.filterIsInstance<SessionEvent.Error>().single()
+
+            assertEquals(SessionEvent.Stage.Session, error.stage)
+            assertFalse(events.any { it is SessionEvent.RoundStarted })
+            assertFalse(events.any { it is SessionEvent.RoundCompleted })
+            assertEquals(emptyList<ChatTurn>(), session.getHistory())
+        } finally {
+            session.close()
+        }
+    }
+
+    @Test
+    fun `最终 completed 事件不会重复发送`() = runBlocking {
+        val protocol = RecordingChatProtocol {
+            flowOf(
+                ProtocolEvent.TextDelta("hel"),
+                ProtocolEvent.TextDelta("lo"),
+                ProtocolEvent.Completed
+            )
+        }
+        val session = newChatSession(protocol = protocol, engine = FakeHttpEngine())
+
+        try {
+            val events = session.send("hi").toList()
+            val completed = events.filterIsInstance<SessionEvent.RoundCompleted>()
+
+            assertEquals(1, completed.size)
+            assertEquals(SessionEvent.RoundCompleted(fullText = "hello"), completed.single())
+        } finally {
+            session.close()
+        }
+    }
+
+    @Test
     fun `已开始 round 发生异常时仍发出 complete`() = runBlocking {
         val protocol = RecordingChatProtocol {
             flow {
@@ -662,6 +731,58 @@ class SessionFlowRegressionTest {
             )
             assertEquals(2, events.filterIsInstance<SessionEvent.ToolSucceeded>().size)
             assertEquals(SessionEvent.RoundCompleted(fullText = "done"), events.last())
+        } finally {
+            session.close()
+        }
+    }
+
+    @Test
+    fun `多轮工具调用只发送一次 started 和一次 completed`() = runBlocking {
+        var parseCount = 0
+        val protocol = RecordingChatProtocol {
+            when (parseCount++) {
+                0 -> flowOf(
+                    ProtocolEvent.ToolCallReady(
+                        callId = "call-1",
+                        toolName = "lookup",
+                        argumentsJson = """{"query":"one"}"""
+                    ),
+                    ProtocolEvent.Completed
+                )
+
+                1 -> flowOf(
+                    ProtocolEvent.ToolCallReady(
+                        callId = "call-2",
+                        toolName = "lookup",
+                        argumentsJson = """{"query":"two"}"""
+                    ),
+                    ProtocolEvent.Completed
+                )
+
+                else -> flowOf(
+                    ProtocolEvent.TextDelta("done"),
+                    ProtocolEvent.Completed
+                )
+            }
+        }
+        val session = newChatSession(protocol = protocol, engine = FakeHttpEngine()) {
+            registerLookupTool()
+            hooks {
+                when (id) {
+                    "call-1" -> ok("""{"answer":"one"}""")
+                    "call-2" -> ok("""{"answer":"two"}""")
+                    else -> error("unexpected call")
+                }
+            }
+        }
+
+        try {
+            val events = session.send("hi").toList()
+            val completed = events.filterIsInstance<SessionEvent.RoundCompleted>()
+
+            assertEquals(1, events.filterIsInstance<SessionEvent.RoundStarted>().size)
+            assertEquals(1, completed.size)
+            assertEquals(SessionEvent.RoundCompleted(fullText = "done"), completed.single())
         } finally {
             session.close()
         }

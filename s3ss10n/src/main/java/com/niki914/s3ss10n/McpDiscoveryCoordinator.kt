@@ -1,6 +1,7 @@
 package com.niki914.s3ss10n
 
 import com.niki914.s3ss10n.json.JsonCodec
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -45,7 +46,7 @@ internal class McpDiscoveryCoordinator(
         }
         val outcomes = coroutineScope {
             enabledServers.map { (serverName, serverConfig) ->
-                async {
+                async(start = CoroutineStart.UNDISPATCHED) {
                     refreshServerTools(
                         serverName = serverName,
                         serverConfig = serverConfig,
