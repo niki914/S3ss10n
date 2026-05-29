@@ -1,6 +1,9 @@
 package com.niki914.s3ss10n
 
 import com.niki914.s3ss10n.ext.protocol.ProtocolEvent
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -296,6 +299,344 @@ class McpRefreshTest {
             assertFalse(result.isPartialSuccess)
             assertEquals(listOf("docs"), result.refreshedServers)
             assertEquals(1, result.discoveredToolCount)
+        } finally {
+            session.close()
+        }
+    }
+
+    @Test
+    fun `config fingerprint 变化后旧 discovery 结果被 ignored`() = runBlocking {
+        val oldToolsListStarted = CompletableDeferred<Unit>()
+        val releaseOldToolsList = CompletableDeferred<Unit>()
+        val failures = mutableListOf<Triple<String, String, McpCachePolicy>>()
+        val engine = FakeMcpHttpEngine(
+            toolsByUrl = mapOf(
+                "https://mcp.old" to listOf(
+                    McpDiscoveredTool(
+                        name = "old_search",
+                        description = "old search",
+                        inputSchema = mapOf("type" to "object")
+                    )
+                ),
+                "https://mcp.new" to listOf(
+                    McpDiscoveredTool(
+                        name = "new_search",
+                        description = "new search",
+                        inputSchema = mapOf("type" to "object")
+                    )
+                )
+            )
+        )
+        engine.beforeToolsListResponse = { url ->
+            if (url == "https://mcp.old") {
+                oldToolsListStarted.complete(Unit)
+                releaseOldToolsList.await()
+            }
+        }
+        val session = newChatSession(
+            protocol = RecordingChatProtocol { flowOf(ProtocolEvent.Completed) },
+            engine = engine
+        ) {
+            mcp {
+                add("docs") {
+                    http { url = "https://mcp.old" }
+                }
+            }
+            mcpHooks {
+                onDiscoveryFailed = { server, error, policy ->
+                    failures += Triple(server, error.message ?: "", policy)
+                }
+            }
+        }
+
+        try {
+            val oldRefresh = async { session.refreshMcpTools() }
+            oldToolsListStarted.await()
+
+            session.update {
+                mcp {
+                    replace("docs") {
+                        http { url = "https://mcp.new" }
+                    }
+                }
+            }
+            releaseOldToolsList.complete(Unit)
+
+            val oldResult = oldRefresh.await()
+            val newResult = session.refreshMcpTools()
+            val snapshot = session.getMcpDiscoverySnapshot()
+
+            assertFalse(oldResult.isSuccess)
+            assertEquals("docs", oldResult.failedServers.single().serverName)
+            assertEquals(
+                "MCP discovery ignored because config changed",
+                oldResult.failedServers.single().message
+            )
+            assertTrue(
+                failures.any {
+                    it.first == "docs" &&
+                        it.second == "MCP discovery ignored because config changed" &&
+                        it.third == McpCachePolicy.IgnoredBecauseConfigChanged
+                }
+            )
+            assertTrue(newResult.isSuccess)
+            assertEquals(McpDiscoveryState.Available, snapshot.servers.getValue("docs").state)
+            assertTrue(snapshot.finalToolRegistry.tools.any { it.name == "new_search" })
+            assertTrue(snapshot.finalToolRegistry.tools.none { it.name == "old_search" })
+        } finally {
+            session.close()
+        }
+    }
+
+    @Test
+    fun `disabled server 不刷新且不进入 final tool registry`() = runBlocking {
+        val engine = FakeMcpHttpEngine(
+            toolsByUrl = mapOf(
+                "https://mcp.disabled" to listOf(
+                    McpDiscoveredTool(
+                        name = "disabled_search",
+                        description = "disabled search",
+                        inputSchema = mapOf("type" to "object")
+                    )
+                )
+            )
+        )
+        val session = newChatSession(
+            protocol = RecordingChatProtocol { flowOf(ProtocolEvent.Completed) },
+            engine = engine
+        ) {
+            mcp {
+                add("disabled") {
+                    enabled = false
+                    http { url = "https://mcp.disabled" }
+                }
+            }
+        }
+
+        try {
+            val result = session.refreshMcpTools()
+            val snapshot = session.getMcpDiscoverySnapshot()
+            val server = snapshot.servers.getValue("disabled")
+
+            assertTrue(result.isSuccess)
+            assertEquals(emptyList<String>(), result.refreshedServers)
+            assertEquals(0, result.discoveredToolCount)
+            assertEquals(
+                0,
+                engine.unaryCalls.count {
+                    it.first == "https://mcp.disabled" && it.second == "tools/list"
+                }
+            )
+            assertFalse(server.enabled)
+            assertEquals(McpDiscoveryState.Idle, server.state)
+            assertTrue(snapshot.finalToolRegistry.tools.none { it.name == "disabled_search" })
+        } finally {
+            session.close()
+        }
+    }
+
+    @Test
+    fun `并发 refresh 同一 server 复用 in flight discovery`() = runBlocking {
+        val toolsListStarted = CompletableDeferred<Unit>()
+        val releaseToolsList = CompletableDeferred<Unit>()
+        val engine = FakeMcpHttpEngine(
+            toolsByUrl = mapOf(
+                "https://mcp.ok" to listOf(
+                    McpDiscoveredTool(
+                        name = "remote_search",
+                        description = "search docs",
+                        inputSchema = mapOf("type" to "object")
+                    )
+                )
+            )
+        )
+        engine.beforeToolsListResponse = { url ->
+            if (url == "https://mcp.ok") {
+                toolsListStarted.complete(Unit)
+                releaseToolsList.await()
+            }
+        }
+        val session = newChatSession(
+            protocol = RecordingChatProtocol { flowOf(ProtocolEvent.Completed) },
+            engine = engine
+        ) {
+            mcp {
+                add("docs") {
+                    http { url = "https://mcp.ok" }
+                }
+            }
+        }
+
+        try {
+            toolsListStarted.await()
+            val first = async { session.refreshMcpTools() }
+            val second = async { session.refreshMcpTools() }
+            releaseToolsList.complete(Unit)
+            val results = listOf(first, second).awaitAll()
+
+            assertTrue(results.all { it.isSuccess })
+            assertEquals(
+                1,
+                engine.unaryCalls.count { it.first == "https://mcp.ok" && it.second == "tools/list" }
+            )
+        } finally {
+            session.close()
+        }
+    }
+
+    @Test
+    fun `onDiscoveryFailed 收到 server error 和 cache policy`() = runBlocking {
+        val failures = mutableListOf<Triple<String, String, McpCachePolicy>>()
+        val engine = FakeMcpHttpEngine(
+            toolsByUrl = emptyMap(),
+            failuresByUrl = mapOf(
+                "https://mcp.bad" to IllegalStateException("boom")
+            )
+        )
+        val session = newChatSession(
+            protocol = RecordingChatProtocol { flowOf(ProtocolEvent.Completed) },
+            engine = engine
+        ) {
+            mcp {
+                add("bad") {
+                    http { url = "https://mcp.bad" }
+                }
+            }
+            mcpHooks {
+                onDiscoveryFailed = { server, error, policy ->
+                    failures += Triple(server, error.message ?: "", policy)
+                }
+            }
+        }
+
+        try {
+            val result = session.refreshMcpTools()
+
+            assertFalse(result.isSuccess)
+            assertTrue(
+                failures.any {
+                    it.first == "bad" &&
+                        it.second == "boom" &&
+                        it.third == McpCachePolicy.NoUsableCache
+                }
+            )
+        } finally {
+            session.close()
+        }
+    }
+
+    @Test
+    fun `onDiscoveryStateChanged 顺序为 discovering 到 available`() = runBlocking {
+        val states = mutableListOf<McpDiscoveryState>()
+        val engine = FakeMcpHttpEngine(
+            toolsByUrl = mapOf(
+                "https://mcp.ok" to listOf(
+                    McpDiscoveredTool(
+                        name = "remote_search",
+                        description = "search docs",
+                        inputSchema = mapOf("type" to "object")
+                    )
+                )
+            )
+        )
+        val session = newChatSession(
+            protocol = RecordingChatProtocol { flowOf(ProtocolEvent.Completed) },
+            engine = engine
+        ) {
+            mcp {
+                add("docs") {
+                    http { url = "https://mcp.ok" }
+                }
+            }
+            mcpHooks {
+                onDiscoveryStateChanged = { server, snapshot ->
+                    if (server == "docs") states += snapshot.state
+                }
+            }
+        }
+
+        try {
+            val result = session.refreshMcpTools()
+
+            assertTrue(result.isSuccess)
+            assertTrue(
+                states.windowed(2).any {
+                    it == listOf(McpDiscoveryState.Discovering, McpDiscoveryState.Available)
+                }
+            )
+        } finally {
+            session.close()
+        }
+    }
+
+    @Test
+    fun `onDiscoveryStateChanged 顺序为 discovering 到 failed`() = runBlocking {
+        val states = mutableListOf<McpDiscoveryState>()
+        val engine = FakeMcpHttpEngine(
+            toolsByUrl = emptyMap(),
+            failuresByUrl = mapOf(
+                "https://mcp.bad" to IllegalStateException("boom")
+            )
+        )
+        val session = newChatSession(
+            protocol = RecordingChatProtocol { flowOf(ProtocolEvent.Completed) },
+            engine = engine
+        ) {
+            mcp {
+                add("bad") {
+                    http { url = "https://mcp.bad" }
+                }
+            }
+            mcpHooks {
+                onDiscoveryStateChanged = { server, snapshot ->
+                    if (server == "bad") states += snapshot.state
+                }
+            }
+        }
+
+        try {
+            val result = session.refreshMcpTools()
+
+            assertFalse(result.isSuccess)
+            assertTrue(
+                states.windowed(2).any {
+                    it == listOf(McpDiscoveryState.Discovering, McpDiscoveryState.Failed)
+                }
+            )
+        } finally {
+            session.close()
+        }
+    }
+
+    @Test
+    fun `discovery failure hook 抛异常不影响 refresh result`() = runBlocking {
+        val engine = FakeMcpHttpEngine(
+            toolsByUrl = emptyMap(),
+            failuresByUrl = mapOf(
+                "https://mcp.bad" to IllegalStateException("boom")
+            )
+        )
+        val session = newChatSession(
+            protocol = RecordingChatProtocol { flowOf(ProtocolEvent.Completed) },
+            engine = engine
+        ) {
+            mcp {
+                add("bad") {
+                    http { url = "https://mcp.bad" }
+                }
+            }
+            mcpHooks {
+                onDiscoveryFailed = { _, _, _ -> error("hook boom") }
+            }
+        }
+
+        try {
+            val result = session.refreshMcpTools()
+
+            assertFalse(result.isSuccess)
+            assertFalse(result.isPartialSuccess)
+            assertEquals("bad", result.failedServers.single().serverName)
+            assertEquals("boom", result.failedServers.single().message)
         } finally {
             session.close()
         }

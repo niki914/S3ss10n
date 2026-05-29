@@ -10,15 +10,12 @@ import com.niki914.s3ss10n.ext.protocol.ProtocolEvent
 import com.niki914.s3ss10n.util.HistoryKeeper
 import com.niki914.s3ss10n.util.ToolCallWaiter
 import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -37,8 +34,13 @@ class ChatSession internal constructor(
 
     private suspend fun thisConfig(): SessionConfig = configMutex.withLock { _config }
     private val mcpClient: McpClient = HttpMcpClient(engine = engine, codec = jsonCodec)
-    private val mcpDiscoveryCache = McpDiscoveryCache()
     private val scope = CoroutineScope(SupervisorJob())
+    private val mcpDiscoveryCoordinator = McpDiscoveryCoordinator(
+        mcpClient = mcpClient,
+        scope = scope,
+        codec = jsonCodec,
+        latestConfig = ::thisConfig
+    )
     private var currJob: Job? = null
     private val chatMutex = Mutex()
     private val historyKeeper = HistoryKeeper()
@@ -48,7 +50,7 @@ class ChatSession internal constructor(
 
     init {
         initialConfig.localToolRegistry.codec = jsonCodec
-        scheduleDiscovery(initialConfig)
+        mcpDiscoveryCoordinator.scheduleDiscovery(initialConfig)
     }
 
     private class RoundContext(
@@ -65,21 +67,13 @@ class ChatSession internal constructor(
         val original: Throwable
     ) : RuntimeException(original)
 
-    private data class ServerDiscoveryOutcome(
-        val serverName: String,
-        val fingerprint: String,
-        val tools: List<McpDiscoveredTool>?,
-        val failureMessage: String?,
-        val cacheCommitted: Boolean
-    )
-
     override suspend fun send(text: String, onEvent: suspend (SessionEvent) -> Unit) {
         val config = thisConfig()
-        scheduleDiscovery(config)
+        mcpDiscoveryCoordinator.scheduleDiscovery(config)
         val ctx = RoundContext(
             config.toRoundSnapshot(
                 codec = jsonCodec,
-                discoveredMcpTools = discoveredToolsSnapshot(config)
+                discoveredMcpTools = mcpDiscoveryCoordinator.discoveredToolsSnapshot(config)
             ),
             onEvent,
             text
@@ -103,40 +97,15 @@ class ChatSession internal constructor(
             _config = updated
             updated
         }
-        scheduleDiscovery(updatedConfig, refreshCached = true)
+        mcpDiscoveryCoordinator.scheduleDiscovery(updatedConfig, refreshCached = true)
     }
 
     override suspend fun refreshMcpTools(): McpRefreshResult {
-        return refreshEnabledServers(config = thisConfig(), refreshCached = true)
+        return mcpDiscoveryCoordinator.refreshEnabledServers(config = thisConfig(), refreshCached = true)
     }
 
     override suspend fun getMcpDiscoverySnapshot(): McpDiscoverySnapshot {
-        val config = thisConfig()
-        val servers = config.mcpRegistry.servers.mapValues { (serverName, server) ->
-            val fingerprint = server.discoveryFingerprint(serverName)
-            mcpDiscoveryCache.stateSnapshot(
-                serverName = serverName,
-                fingerprint = fingerprint,
-                enabled = server.enabled
-            ) ?: McpServerDiscoverySnapshot(
-                serverName = serverName,
-                enabled = server.enabled,
-                fingerprint = fingerprint,
-                state = McpDiscoveryState.Idle,
-                errorMessage = null,
-                lastSuccessAtMillis = null,
-                discoveredToolCount = 0,
-                stale = false
-            )
-        }
-        val finalToolRegistry = config.buildToolCatalog(
-            codec = jsonCodec,
-            discoveredMcpTools = discoveredToolsSnapshot(config)
-        ).registrySnapshot
-        return McpDiscoverySnapshot(
-            servers = servers,
-            finalToolRegistry = finalToolRegistry
-        )
+        return mcpDiscoveryCoordinator.getSnapshot(thisConfig())
     }
 
     override suspend fun getHistory(): List<ChatTurn> {
@@ -583,222 +552,4 @@ class ChatSession internal constructor(
         }
     }
 
-    private suspend fun discoveredToolsSnapshot(config: SessionConfig): Map<String, List<McpDiscoveredTool>> {
-        return config.mcpRegistry.servers.mapNotNull { (serverName, server) ->
-            if (!server.enabled) return@mapNotNull null
-            val fingerprint = server.discoveryFingerprint(serverName)
-            val tools = mcpDiscoveryCache.snapshot(serverName, fingerprint)
-            tools?.let { serverName to it }
-        }.toMap()
-    }
-
-    private suspend fun refreshEnabledServers(
-        config: SessionConfig,
-        refreshCached: Boolean
-    ): McpRefreshResult {
-        val enabledServers = config.mcpRegistry.servers.filterValues { it.enabled }
-        if (enabledServers.isEmpty()) {
-            return McpRefreshResult(
-                refreshedServers = emptyList(),
-                failedServers = emptyList(),
-                discoveredToolCount = 0
-            )
-        }
-        val outcomes = coroutineScope {
-            enabledServers.map { (serverName, serverConfig) ->
-                async {
-                    refreshServerTools(
-                        serverName = serverName,
-                        serverConfig = serverConfig,
-                        refreshCached = refreshCached
-                    )
-                }
-            }.awaitAll()
-        }
-        return McpRefreshResult(
-            refreshedServers = outcomes
-                .filter { it.failureMessage == null && it.cacheCommitted }
-                .map { it.serverName },
-            failedServers = outcomes.mapNotNull { outcome ->
-                outcome.failureMessage?.let { message ->
-                    McpServerRefreshFailure(
-                        serverName = outcome.serverName,
-                        message = message
-                    )
-                }
-            },
-            discoveredToolCount = outcomes
-                .filter { it.failureMessage == null && it.cacheCommitted }
-                .sumOf { it.tools?.size ?: 0 }
-        )
-    }
-
-    private suspend fun refreshServerTools(
-        serverName: String,
-        serverConfig: McpServerConfig,
-        refreshCached: Boolean
-    ): ServerDiscoveryOutcome {
-        val fingerprint = serverConfig.discoveryFingerprint(serverName)
-        if (!refreshCached) {
-            val cachedTools = mcpDiscoveryCache.snapshot(serverName, fingerprint)
-            if (cachedTools != null) {
-                return ServerDiscoveryOutcome(
-                    serverName = serverName,
-                    fingerprint = fingerprint,
-                    tools = cachedTools,
-                    failureMessage = null,
-                    cacheCommitted = true
-                )
-            }
-        }
-
-        val serverSnapshot = serverConfig.deepCopy()
-        val (deferred, created) = mcpDiscoveryCache.acquireRefresh(
-            serverName = serverName,
-            fingerprint = fingerprint,
-            scope = scope
-        ) {
-            runServerDiscovery(
-                serverName = serverName,
-                fingerprint = fingerprint,
-                serverConfig = serverSnapshot
-            )
-        }
-        if (created) {
-            deferred.invokeOnCompletion {
-                scope.launch {
-                    mcpDiscoveryCache.clearRefresh(
-                        serverName = serverName,
-                        fingerprint = fingerprint,
-                        deferred = deferred
-                    )
-                }
-            }
-        }
-        return deferred.await()
-    }
-
-    private suspend fun runServerDiscovery(
-        serverName: String,
-        fingerprint: String,
-        serverConfig: McpServerConfig
-    ): ServerDiscoveryOutcome {
-        val discoveringSnapshot = mcpDiscoveryCache.markDiscovering(
-            serverName = serverName,
-            fingerprint = fingerprint,
-            nowMillis = System.currentTimeMillis()
-        )
-        notifyDiscoveryStateChanged(serverName, discoveringSnapshot)
-        return xTrySuspend(
-            "ChatSession.runServerDiscovery",
-            onError = { t ->
-                val message = t.message ?: "MCP discovery failed"
-                val (failureSnapshot, policy) = mcpDiscoveryCache.commitFailure(
-                    serverName = serverName,
-                    fingerprint = fingerprint,
-                    message = message,
-                    nowMillis = System.currentTimeMillis()
-                )
-                notifyDiscoveryStateChanged(serverName, failureSnapshot)
-                notifyDiscoveryFailed(serverName, t, policy)
-                ServerDiscoveryOutcome(
-                    serverName = serverName,
-                    fingerprint = fingerprint,
-                    tools = null,
-                    failureMessage = message,
-                    cacheCommitted = false
-                )
-            }
-        ) {
-            val tools = mcpClient.listTools(serverConfig)
-            val latestServer = thisConfig().mcpRegistry.servers[serverName]
-            if (latestServer?.enabled == true &&
-                latestServer.discoveryFingerprint(serverName) == fingerprint
-            ) {
-                val successSnapshot = mcpDiscoveryCache.commitSuccess(
-                    serverName = serverName,
-                    fingerprint = fingerprint,
-                    tools = tools,
-                    nowMillis = System.currentTimeMillis()
-                )
-                notifyDiscoveryStateChanged(serverName, successSnapshot)
-                notifyToolsDiscovered(serverName, tools)
-                ServerDiscoveryOutcome(
-                    serverName = serverName,
-                    fingerprint = fingerprint,
-                    tools = tools,
-                    failureMessage = null,
-                    cacheCommitted = true
-                )
-            } else {
-                val message = "MCP discovery ignored because config changed"
-                val failureSnapshot = mcpDiscoveryCache.commitIgnoredBecauseConfigChanged(
-                    serverName = serverName,
-                    fingerprint = fingerprint,
-                    message = message,
-                    nowMillis = System.currentTimeMillis()
-                )
-                notifyDiscoveryStateChanged(serverName, failureSnapshot)
-                notifyDiscoveryFailed(
-                    serverName = serverName,
-                    error = IllegalStateException(message),
-                    policy = McpCachePolicy.IgnoredBecauseConfigChanged
-                )
-                ServerDiscoveryOutcome(
-                    serverName = serverName,
-                    fingerprint = fingerprint,
-                    tools = null,
-                    failureMessage = message,
-                    cacheCommitted = false
-                )
-            }
-        }
-    }
-
-    private suspend fun notifyToolsDiscovered(
-        serverName: String,
-        tools: List<McpDiscoveredTool>
-    ) {
-        val hook = thisConfig().mcpHooksBlock?.onToolsDiscovered ?: return
-        xTrySuspend("ChatSession.notifyToolsDiscovered") {
-            hook(serverName, tools)
-        }
-    }
-
-    private suspend fun notifyDiscoveryFailed(
-        serverName: String,
-        error: Throwable,
-        policy: McpCachePolicy
-    ) {
-        val hook = thisConfig().mcpHooksBlock?.onDiscoveryFailed ?: return
-        xTrySuspend("ChatSession.notifyDiscoveryFailed") {
-            hook(serverName, error, policy)
-        }
-    }
-
-    private suspend fun notifyDiscoveryStateChanged(
-        serverName: String,
-        snapshot: McpServerDiscoverySnapshot
-    ) {
-        val hook = thisConfig().mcpHooksBlock?.onDiscoveryStateChanged ?: return
-        xTrySuspend("ChatSession.notifyDiscoveryStateChanged") {
-            hook(serverName, snapshot)
-        }
-    }
-
-    private fun scheduleDiscovery(
-        config: SessionConfig,
-        refreshCached: Boolean = false
-    ) {
-        config.mcpRegistry.servers.forEach { (serverName, serverConfig) ->
-            if (!serverConfig.enabled) return@forEach
-            scope.launch {
-                refreshServerTools(
-                    serverName = serverName,
-                    serverConfig = serverConfig,
-                    refreshCached = refreshCached
-                )
-            }
-        }
-    }
 }

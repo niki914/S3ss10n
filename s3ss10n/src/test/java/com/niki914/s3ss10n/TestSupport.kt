@@ -91,6 +91,7 @@ internal class FakeMcpHttpEngine(
 ) : HttpEngine {
     val unaryCalls = mutableListOf<Pair<String, String>>()
     val failuresByUrl: MutableMap<String, Throwable> = failuresByUrl.toMutableMap()
+    var beforeToolsListResponse: (suspend (url: String) -> Unit)? = null
 
     override fun stream(request: HttpRequest): Flow<String> = emptyFlow()
 
@@ -98,6 +99,7 @@ internal class FakeMcpHttpEngine(
         val method = rpcMethod(request)
         unaryCalls += request.url to method
         if (method == "tools/list") {
+            beforeToolsListResponse?.invoke(request.url)
             failuresByUrl[request.url]?.let { throw it }
         }
         return when (method) {
