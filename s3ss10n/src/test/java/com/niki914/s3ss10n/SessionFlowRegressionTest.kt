@@ -938,6 +938,115 @@ class SessionFlowRegressionTest {
     }
 
     @Test
+    fun `update 后普通 config 字段会被后续 send snapshot 使用`() = runBlocking {
+        val engine = FakeHttpEngine()
+        val protocol = RecordingChatProtocol {
+            flowOf(ProtocolEvent.TextDelta("hello"), ProtocolEvent.Completed)
+        }
+        val session = newChatSession(protocol = protocol, engine = engine) {
+            endpoint = "https://example.com/initial"
+            model = "initial-model"
+            header("X-Trace", "initial")
+        }
+
+        try {
+            session.update {
+                endpoint = "https://example.com/updated"
+                model = "updated-model"
+                header("X-Trace", "updated")
+                header("X-New", "new")
+            }
+            session.send("hi").toList()
+
+            val snapshot = checkNotNull(protocol.lastSnapshot)
+            assertEquals("https://example.com/updated", snapshot.endpoint)
+            assertEquals("updated-model", snapshot.model)
+            assertEquals(
+                mapOf(
+                    "X-Trace" to "updated",
+                    "X-New" to "new"
+                ),
+                snapshot.headers
+            )
+            assertEquals("updated", engine.streamRequests.single().headers["X-Trace"])
+            assertEquals("new", engine.streamRequests.single().headers["X-New"])
+        } finally {
+            session.close()
+        }
+    }
+
+    @Test
+    fun `send 期间 update 不影响当前 round snapshot`() = runBlocking {
+        val firstRoundStarted = CompletableDeferred<Unit>()
+        val firstRoundRelease = CompletableDeferred<Unit>()
+        var parseCount = 0
+        val protocol = RecordingChatProtocol {
+            flow {
+                parseCount += 1
+                if (parseCount == 1) {
+                    firstRoundStarted.complete(Unit)
+                    firstRoundRelease.await()
+                }
+                emit(ProtocolEvent.TextDelta("hello"))
+                emit(ProtocolEvent.Completed)
+            }
+        }
+        val session = newChatSession(protocol = protocol, engine = FakeHttpEngine()) {
+            model = "initial-model"
+        }
+
+        try {
+            val first = async { session.send("first").toList() }
+            firstRoundStarted.await()
+            val firstSnapshot = checkNotNull(protocol.lastSnapshot)
+
+            session.update {
+                model = "updated-model"
+            }
+            firstRoundRelease.complete(Unit)
+            first.await()
+
+            assertEquals("initial-model", firstSnapshot.model)
+
+            session.send("second").toList()
+            assertEquals("updated-model", protocol.lastSnapshot?.model)
+        } finally {
+            firstRoundRelease.complete(Unit)
+            session.close()
+        }
+    }
+
+    @Test
+    fun `close 取消 scope 使挂起 send 被取消`() = runBlocking {
+        val roundStarted = CompletableDeferred<Unit>()
+        val neverRelease = CompletableDeferred<Unit>()
+        val protocol = RecordingChatProtocol {
+            flow {
+                roundStarted.complete(Unit)
+                neverRelease.await()
+                emit(ProtocolEvent.TextDelta("late"))
+                emit(ProtocolEvent.Completed)
+            }
+        }
+        val session = newChatSession(protocol = protocol, engine = FakeHttpEngine())
+
+        val sendJob = async { session.send("hi").toList() }
+        roundStarted.await()
+
+        session.close()
+
+        try {
+            sendJob.await()
+            fail("send should be cancelled by close")
+        } catch (_: CancellationException) {
+            // close 会取消 session scope，挂起中的 round 必须随之取消。
+        } finally {
+            neverRelease.complete(Unit)
+        }
+        Unit
+    }
+
+    @Test
     fun `custom header 按大小写不敏感规则覆盖 auth header`() = runBlocking {
         val engine = FakeHttpEngine()
         val protocol = RecordingChatProtocol {

@@ -6,14 +6,10 @@ import com.niki914.s3ss10n.net.HttpEngine
 import com.niki914.s3ss10n.ext.net.OkHttpEngine
 import com.niki914.s3ss10n.ext.protocol.ChatProtocol
 import com.niki914.s3ss10n.util.HistoryKeeper
-import kotlinx.coroutines.async
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 
 class ConfigInvalidException :
     IllegalAccessException("Config is invalid. Set endpoint and model first!")
@@ -23,12 +19,11 @@ class ChatSession internal constructor(
     private val protocol: ChatProtocol
 ) : Session {
 
-    private val configMutex = Mutex()
-    private var _config: SessionConfig = initialConfig
+    private val state: SessionState = SessionState(initialConfig)
     private val engine: HttpEngine = initialConfig.httpEngine ?: OkHttpEngine()
     private val jsonCodec: JsonCodec = initialConfig.jsonCodec ?: JsonCodecFactory.create()
 
-    private suspend fun thisConfig(): SessionConfig = configMutex.withLock { _config }
+    private suspend fun thisConfig(): SessionConfig = state.currentConfig()
     private val mcpClient: McpClient = HttpMcpClient(engine = engine, codec = jsonCodec)
     private val toolCallCoordinator = ToolCallCoordinator(mcpClient = mcpClient, codec = jsonCodec)
     private val scope = CoroutineScope(SupervisorJob())
@@ -38,8 +33,6 @@ class ChatSession internal constructor(
         codec = jsonCodec,
         latestConfig = ::thisConfig
     )
-    private var currJob: Job? = null
-    private val chatMutex = Mutex()
     private val historyKeeper = HistoryKeeper()
     private val roundRunner = RoundRunner(
         protocol = protocol,
@@ -55,7 +48,7 @@ class ChatSession internal constructor(
     }
 
     override suspend fun send(text: String, onEvent: suspend (SessionEvent) -> Unit) {
-        val config = thisConfig()
+        val config = state.currentConfig()
         mcpDiscoveryCoordinator.scheduleDiscovery(config)
         val input = RoundInput(
             snapshot = config.toRoundSnapshot(
@@ -65,25 +58,18 @@ class ChatSession internal constructor(
             initialInput = text,
             onEvent = onEvent
         )
-        awaitRound(runRound(input))
+        awaitRound(
+            state.runReplacingCurrent(
+                scope = scope,
+                cleanupTools = { roundRunner.cancelAndClearTools(join = true) }
+            ) {
+                roundRunner.run(input)
+            }
+        )
     }
 
     override suspend fun update(block: SessionConfig.Builder.() -> Unit) {
-        val updatedConfig = configMutex.withLock {
-            val baseCodec = _config.jsonCodec
-            val baseEngine = _config.httpEngine
-            val updated = _config.toBuilder().apply(block).build()
-            if (updated.jsonCodec !== baseCodec) {
-                xLog("X", "update ignored open-only field: jsonCodec")
-                updated.jsonCodec = baseCodec
-            }
-            if (updated.httpEngine !== baseEngine) {
-                xLog("X", "update ignored open-only field: httpEngine")
-                updated.httpEngine = baseEngine
-            }
-            _config = updated
-            updated
-        }
+        val updatedConfig = state.updateConfig(block)
         mcpDiscoveryCoordinator.scheduleDiscovery(updatedConfig, refreshCached = true)
     }
 
@@ -100,23 +86,15 @@ class ChatSession internal constructor(
     }
 
     override suspend fun resetConversation() {
-        cleanUpCurrWork()
+        state.cancelCurrentRound {
+            roundRunner.cancelAndClearTools(join = true)
+        }
         historyKeeper.clear()
     }
 
     override suspend fun close() {
         scope.cancel()
         engine.close()
-    }
-
-    private fun runRound(input: RoundInput): Deferred<Unit> = scope.async {
-        val roundJob = chatMutex.withLock {
-            cleanUpCurrWork()
-            scope.async {
-                roundRunner.run(input)
-            }.also { currJob = it }
-        }
-        roundJob.await()
     }
 
     private suspend fun awaitRound(round: Deferred<Unit>) {
@@ -134,12 +112,6 @@ class ChatSession internal constructor(
         } else {
             this
         }
-    }
-
-    private suspend fun cleanUpCurrWork() {
-        currJob?.cancel()
-        currJob?.join()
-        roundRunner.cancelAndClearTools(join = true)
     }
 
 }
