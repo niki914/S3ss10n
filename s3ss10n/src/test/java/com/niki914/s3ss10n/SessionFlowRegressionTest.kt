@@ -7,10 +7,12 @@ import com.niki914.s3ss10n.net.HttpTimeouts
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
@@ -35,9 +37,16 @@ class SessionFlowRegressionTest {
                         stage = SessionEvent.Stage.Parse,
                         message = "Empty assistant response"
                     ),
-                    SessionEvent.RoundCompleted(fullText = "")
+                    SessionEvent.RoundCompleted(
+                        fullText = "",
+                        finishReason = SessionEvent.FinishReason.Error
+                    )
                 ),
                 events
+            )
+            assertEquals(
+                SessionEvent.FinishReason.Error,
+                events.filterIsInstance<SessionEvent.RoundCompleted>().single().finishReason
             )
             assertEquals(emptyList<ChatTurn>(), session.getHistory())
         } finally {
@@ -64,6 +73,10 @@ class SessionFlowRegressionTest {
                     SessionEvent.RoundCompleted(fullText = "hello")
                 ),
                 events
+            )
+            assertEquals(
+                SessionEvent.FinishReason.Completed,
+                events.filterIsInstance<SessionEvent.RoundCompleted>().single().finishReason
             )
             assertEquals(
                 listOf(
@@ -103,7 +116,7 @@ class SessionFlowRegressionTest {
     }
 
     @Test
-    fun `配置错误发生在 round started 前且不发 complete`() = runBlocking {
+    fun `配置错误发 Error 并以 Error 完成`() = runBlocking {
         val protocol = RecordingChatProtocol {
             flowOf(ProtocolEvent.TextDelta("should not run"))
         }
@@ -114,10 +127,12 @@ class SessionFlowRegressionTest {
         try {
             val events = session.send("hi").toList()
             val error = events.filterIsInstance<SessionEvent.Error>().single()
+            val completed = events.filterIsInstance<SessionEvent.RoundCompleted>().single()
 
             assertEquals(SessionEvent.Stage.Session, error.stage)
             assertFalse(events.any { it is SessionEvent.RoundStarted })
-            assertFalse(events.any { it is SessionEvent.RoundCompleted })
+            assertEquals(SessionEvent.FinishReason.Error, completed.finishReason)
+            assertEquals("", completed.fullText)
             assertEquals(emptyList<ChatTurn>(), session.getHistory())
         } finally {
             session.close()
@@ -141,6 +156,7 @@ class SessionFlowRegressionTest {
 
             assertEquals(1, completed.size)
             assertEquals(SessionEvent.RoundCompleted(fullText = "hello"), completed.single())
+            assertEquals(SessionEvent.FinishReason.Completed, completed.single().finishReason)
         } finally {
             session.close()
         }
@@ -168,7 +184,13 @@ class SessionFlowRegressionTest {
             assertEquals(SessionEvent.Stage.Parse, error.stage)
             assertEquals("boom", error.message)
             assertTrue(error.cause is IllegalStateException)
-            assertEquals(SessionEvent.RoundCompleted(fullText = "hello"), events[3])
+            assertEquals(
+                SessionEvent.RoundCompleted(
+                    fullText = "hello",
+                    finishReason = SessionEvent.FinishReason.Error
+                ),
+                events[3]
+            )
             assertEquals(emptyList<ChatTurn>(), session.getHistory())
         } finally {
             session.close()
@@ -199,14 +221,427 @@ class SessionFlowRegressionTest {
                         message = "protocol boom",
                         cause = protocolError
                     ),
-                    SessionEvent.RoundCompleted(fullText = "")
+                    SessionEvent.RoundCompleted(
+                        fullText = "",
+                        finishReason = SessionEvent.FinishReason.Error
+                    )
                 ),
                 events
+            )
+            assertEquals(
+                SessionEvent.FinishReason.Error,
+                events.filterIsInstance<SessionEvent.RoundCompleted>().single().finishReason
             )
             assertEquals(emptyList<ChatTurn>(), session.getHistory())
         } finally {
             session.close()
         }
+    }
+
+    @Test
+    fun `协议 error 后有文本最终仍以 Error 完成`() = runBlocking {
+        val protocolError = IllegalStateException("protocol boom")
+        val protocol = RecordingChatProtocol {
+            flowOf(
+                ProtocolEvent.TextDelta("partial"),
+                ProtocolEvent.Error(
+                    cause = protocolError,
+                    stage = SessionEvent.Stage.Parse
+                ),
+                ProtocolEvent.Completed
+            )
+        }
+        val session = newChatSession(protocol = protocol, engine = FakeHttpEngine())
+
+        try {
+            val events = session.send("hi").toList()
+            val completed = events.filterIsInstance<SessionEvent.RoundCompleted>().single()
+
+            assertEquals("partial", completed.fullText)
+            assertEquals(SessionEvent.FinishReason.Error, completed.finishReason)
+        } finally {
+            session.close()
+        }
+    }
+
+    @Test
+    fun `finishReason 默认兼容且正常完成为 Completed`() = runBlocking {
+        val completed = SessionEvent.RoundCompleted(fullText = "done")
+        val protocol = RecordingChatProtocol {
+            flowOf(
+                ProtocolEvent.TextDelta("done"),
+                ProtocolEvent.Completed
+            )
+        }
+        val session = newChatSession(protocol = protocol, engine = FakeHttpEngine())
+
+        try {
+            val events = session.send("hi").toList()
+            val actual = events.filterIsInstance<SessionEvent.RoundCompleted>().single()
+
+            assertEquals(SessionEvent.FinishReason.Completed, completed.finishReason)
+            assertEquals(SessionEvent.FinishReason.Completed, actual.finishReason)
+            assertEquals(SessionEvent.RoundCompleted(fullText = "done"), actual)
+        } finally {
+            session.close()
+        }
+    }
+
+    @Test
+    fun `stop false 取消当前轮且不提交 history`() = runBlocking {
+        val textSeen = CompletableDeferred<Unit>()
+        val neverRelease = CompletableDeferred<Unit>()
+        val events = mutableListOf<SessionEvent>()
+        val protocol = RecordingChatProtocol {
+            flow {
+                emit(ProtocolEvent.TextDelta("partial"))
+                neverRelease.await()
+                emit(ProtocolEvent.Completed)
+            }
+        }
+        val session = newChatSession(protocol = protocol, engine = FakeHttpEngine())
+
+        try {
+            val sendJob = async {
+                session.send("hi") { event ->
+                    events += event
+                    if (event is SessionEvent.TextDelta) {
+                        textSeen.complete(Unit)
+                    }
+                }
+            }
+            textSeen.await()
+
+            session.stop(keepCurrentTurn = false)
+            sendJob.await()
+
+            assertEquals(
+                listOf(
+                    SessionEvent.RoundStarted(input = "hi"),
+                    SessionEvent.TextDelta(delta = "partial", fullText = "partial"),
+                    SessionEvent.RoundCompleted(
+                        fullText = "partial",
+                        finishReason = SessionEvent.FinishReason.Stopped
+                    )
+                ),
+                events
+            )
+            assertEquals(emptyList<ChatTurn>(), session.getHistory())
+        } finally {
+            neverRelease.complete(Unit)
+            session.close()
+        }
+    }
+
+    @Test
+    fun `首事件前 stop 会收口且不挂起`() = runBlocking {
+        val streamStarted = CompletableDeferred<Unit>()
+        val neverRelease = CompletableDeferred<Unit>()
+        val events = mutableListOf<SessionEvent>()
+        val protocol = RecordingChatProtocol {
+            flow {
+                streamStarted.complete(Unit)
+                neverRelease.await()
+                emit(ProtocolEvent.TextDelta("late"))
+            }
+        }
+        val session = newChatSession(protocol = protocol, engine = FakeHttpEngine())
+
+        try {
+            val sendJob = async {
+                session.send("hi") { event ->
+                    events += event
+                }
+            }
+            streamStarted.await()
+
+            withTimeout(3_000) {
+                session.stop()
+                sendJob.await()
+            }
+
+            assertEquals(
+                listOf(
+                    SessionEvent.RoundCompleted(
+                        fullText = "",
+                        finishReason = SessionEvent.FinishReason.Stopped
+                    )
+                ),
+                events
+            )
+            assertEquals(emptyList<ChatTurn>(), session.getHistory())
+        } finally {
+            neverRelease.complete(Unit)
+            session.close()
+        }
+    }
+
+    @Test
+    fun `onEvent 内调用 stop 不会自锁`() = runBlocking {
+        val neverRelease = CompletableDeferred<Unit>()
+        val events = mutableListOf<SessionEvent>()
+        val protocol = RecordingChatProtocol {
+            flow {
+                emit(ProtocolEvent.TextDelta("partial"))
+                neverRelease.await()
+                emit(ProtocolEvent.Completed)
+            }
+        }
+        lateinit var session: ChatSession
+        session = newChatSession(protocol = protocol, engine = FakeHttpEngine())
+
+        try {
+            withTimeout(3_000) {
+                session.send("hi") { event ->
+                    events += event
+                    if (event is SessionEvent.TextDelta) {
+                        session.stop()
+                    }
+                }
+            }
+
+            assertEquals(
+                SessionEvent.RoundCompleted(
+                    fullText = "partial",
+                    finishReason = SessionEvent.FinishReason.Stopped
+                ),
+                events.last()
+            )
+            assertEquals(emptyList<ChatTurn>(), session.getHistory())
+        } finally {
+            neverRelease.complete(Unit)
+            session.close()
+        }
+    }
+
+    @Test
+    fun `工具事件回调内调用 stop 不会等待当前工具自身`() = runBlocking {
+        val hookRelease = CompletableDeferred<Unit>()
+        val events = mutableListOf<SessionEvent>()
+        val protocol = hangingToolThenTextProtocol()
+        lateinit var session: ChatSession
+        session = newChatSession(protocol = protocol, engine = FakeHttpEngine()) {
+            registerLookupTool()
+            hooks {
+                hookRelease.await()
+                ok("""{"answer":"late"}""")
+            }
+        }
+
+        try {
+            withTimeout(3_000) {
+                session.send("hi") { event ->
+                    events += event
+                    if (event is SessionEvent.ToolRunning) {
+                        session.stop()
+                    }
+                }
+            }
+
+            assertEquals(
+                SessionEvent.RoundCompleted(
+                    fullText = "",
+                    finishReason = SessionEvent.FinishReason.Stopped
+                ),
+                events.last()
+            )
+            assertEquals(emptyList<ChatTurn>(), session.getHistory())
+        } finally {
+            hookRelease.complete(Unit)
+            session.close()
+        }
+    }
+
+    @Test
+    fun `stop true 保留 partial assistant`() = runBlocking {
+        val textSeen = CompletableDeferred<Unit>()
+        val neverRelease = CompletableDeferred<Unit>()
+        val events = mutableListOf<SessionEvent>()
+        val protocol = RecordingChatProtocol {
+            flow {
+                emit(ProtocolEvent.TextDelta("partial"))
+                neverRelease.await()
+                emit(ProtocolEvent.Completed)
+            }
+        }
+        val session = newChatSession(protocol = protocol, engine = FakeHttpEngine())
+
+        try {
+            val sendJob = async {
+                session.send("hi") { event ->
+                    events += event
+                    if (event is SessionEvent.TextDelta) {
+                        textSeen.complete(Unit)
+                    }
+                }
+            }
+            textSeen.await()
+
+            session.stop(keepCurrentTurn = true)
+            sendJob.await()
+
+            assertEquals(
+                SessionEvent.RoundCompleted(
+                    fullText = "partial",
+                    finishReason = SessionEvent.FinishReason.Stopped
+                ),
+                events.last()
+            )
+            assertEquals(
+                listOf(
+                    ChatTurn.User(content = "hi"),
+                    ChatTurn.Assistant(content = "partial")
+                ),
+                session.getHistory()
+            )
+        } finally {
+            neverRelease.complete(Unit)
+            session.close()
+        }
+    }
+
+    @Test
+    fun `idle timeout 首事件前触发 Error 和 IdleTimeout 完成`() = runBlocking {
+        val neverRelease = CompletableDeferred<Unit>()
+        val protocol = RecordingChatProtocol {
+            flow {
+                neverRelease.await()
+                emit(ProtocolEvent.TextDelta("late"))
+            }
+        }
+        val session = newChatSession(protocol = protocol, engine = FakeHttpEngine()) {
+            llmIdleTimeoutSeconds = 1
+        }
+
+        try {
+            val events = withTimeout(3_000) { session.send("hi").toList() }
+            val error = events.filterIsInstance<SessionEvent.Error>().single()
+            val completed = events.filterIsInstance<SessionEvent.RoundCompleted>().single()
+
+            assertFalse(events.any { it is SessionEvent.RoundStarted })
+            assertEquals(SessionEvent.Stage.Session, error.stage)
+            assertEquals("LLM idle timeout: no session event for 1 seconds", error.message)
+            assertEquals(SessionEvent.FinishReason.IdleTimeout, completed.finishReason)
+            assertEquals("", completed.fullText)
+            assertEquals(emptyList<ChatTurn>(), session.getHistory())
+        } finally {
+            neverRelease.complete(Unit)
+            session.close()
+        }
+    }
+
+    @Test
+    fun `idle timeout 回调异常会透传且不会挂起`() = runBlocking {
+        val expected = IllegalStateException("timeout callback boom")
+        val neverRelease = CompletableDeferred<Unit>()
+        val protocol = RecordingChatProtocol {
+            flow {
+                neverRelease.await()
+                emit(ProtocolEvent.TextDelta("late"))
+            }
+        }
+        val session = newChatSession(protocol = protocol, engine = FakeHttpEngine()) {
+            llmIdleTimeoutSeconds = 1
+        }
+
+        try {
+            try {
+                withTimeout(3_000) {
+                    session.send("hi") { event ->
+                        if (event is SessionEvent.Error) {
+                            throw expected
+                        }
+                    }
+                }
+                fail("send should throw callback exception")
+            } catch (actual: Throwable) {
+                assertTrue(actual is IllegalStateException)
+                assertEquals(expected.message, actual.message)
+            }
+        } finally {
+            neverRelease.complete(Unit)
+            session.close()
+        }
+    }
+
+    @Test
+    fun `idle timeout 在工具等待中取消 tool wait`() = runBlocking {
+        val hookStarted = CompletableDeferred<Unit>()
+        val hookRelease = CompletableDeferred<Unit>()
+        val protocol = hangingToolThenTextProtocol()
+        val session = newChatSession(protocol = protocol, engine = FakeHttpEngine()) {
+            llmIdleTimeoutSeconds = 1
+            registerLookupTool()
+            hooks {
+                hookStarted.complete(Unit)
+                hookRelease.await()
+                ok("""{"answer":"late"}""")
+            }
+        }
+
+        try {
+            val events = withTimeout(3_000) { session.send("hi").toList() }
+            val error = events.filterIsInstance<SessionEvent.Error>().single()
+            val completed = events.filterIsInstance<SessionEvent.RoundCompleted>().single()
+
+            assertTrue(hookStarted.isCompleted)
+            assertEquals(SessionEvent.Stage.Session, error.stage)
+            assertEquals("LLM idle timeout: no session event for 1 seconds", error.message)
+            assertEquals(SessionEvent.FinishReason.IdleTimeout, completed.finishReason)
+            assertEquals(emptyList<ChatTurn>(), session.getHistory())
+        } finally {
+            hookRelease.complete(Unit)
+            session.close()
+        }
+    }
+
+    @Test
+    fun `idle timeout 为 null 或 0 时关闭`() = runBlocking {
+        suspend fun assertDisabled(timeoutSeconds: Long?) {
+            val textSeen = CompletableDeferred<Unit>()
+            val neverRelease = CompletableDeferred<Unit>()
+            val events = mutableListOf<SessionEvent>()
+            val protocol = RecordingChatProtocol {
+                flow {
+                    emit(ProtocolEvent.TextDelta("partial"))
+                    neverRelease.await()
+                    emit(ProtocolEvent.Completed)
+                }
+            }
+            val session = newChatSession(protocol = protocol, engine = FakeHttpEngine()) {
+                llmIdleTimeoutSeconds = timeoutSeconds
+            }
+
+            try {
+                val sendJob = async {
+                    session.send("hi") { event ->
+                        events += event
+                        if (event is SessionEvent.TextDelta) {
+                            textSeen.complete(Unit)
+                        }
+                    }
+                }
+                textSeen.await()
+                delay(1_100)
+
+                assertFalse(events.any { event ->
+                    event is SessionEvent.Error &&
+                        event.message.startsWith("LLM idle timeout")
+                })
+                session.stop()
+                sendJob.await()
+                assertEquals(
+                    SessionEvent.FinishReason.Stopped,
+                    events.filterIsInstance<SessionEvent.RoundCompleted>().single().finishReason
+                )
+            } finally {
+                neverRelease.complete(Unit)
+                session.close()
+            }
+        }
+
+        assertDisabled(null)
+        assertDisabled(0)
     }
 
     @Test
@@ -352,7 +787,13 @@ class SessionFlowRegressionTest {
             assertEquals("Unknown tool 'missing'", error.message)
             assertEquals(failed.resultJson, toolResult.resultJson)
             assertTrue(toolResult.resultJson.contains("Unknown tool"))
-            assertEquals(SessionEvent.RoundCompleted(fullText = "done"), events.last())
+            assertEquals(
+                SessionEvent.RoundCompleted(
+                    fullText = "done",
+                    finishReason = SessionEvent.FinishReason.Error
+                ),
+                events.last()
+            )
         } finally {
             session.close()
         }
@@ -457,7 +898,13 @@ class SessionFlowRegressionTest {
                         it.cause === boom
                 }
             )
-            assertEquals(SessionEvent.RoundCompleted(fullText = "done"), events.last())
+            assertEquals(
+                SessionEvent.RoundCompleted(
+                    fullText = "done",
+                    finishReason = SessionEvent.FinishReason.Error
+                ),
+                events.last()
+            )
         } finally {
             session.close()
         }

@@ -20,6 +20,12 @@ internal class HistoryKeeper {
         history.clear()
     }
 
+    suspend fun dropLast(count: Int) = mutex.withLock {
+        repeat(count.coerceAtMost(history.size)) {
+            history.removeAt(history.lastIndex)
+        }
+    }
+
     suspend fun dropLastIfUserOrphan() = mutex.withLock {
         if (history.lastOrNull() is ChatTurn.User) {
             history.removeAt(history.lastIndex)

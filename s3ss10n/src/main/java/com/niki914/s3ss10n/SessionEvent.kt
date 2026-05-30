@@ -30,7 +30,8 @@ sealed interface SessionEvent {
     ) : SessionEvent
 
     data class RoundCompleted(
-        val fullText: String
+        val fullText: String,
+        val finishReason: FinishReason = FinishReason.Completed
     ) : SessionEvent
 
     data class Error(
@@ -44,5 +45,13 @@ sealed interface SessionEvent {
         Parse,
         Tool,
         Session
+    }
+
+    enum class FinishReason {
+        Completed,
+        Stopped,
+        IdleTimeout,
+        Error,
+        Cancelled
     }
 }

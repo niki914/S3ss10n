@@ -13,6 +13,7 @@ open class SessionConfig {
     var connectTimeoutSeconds: Long = 30
     var readTimeoutSeconds: Long = 60
     var writeTimeoutSeconds: Long = 30
+    var llmIdleTimeoutSeconds: Long? = null
 
     /**
      * 自定义 JSON 编解码器。
@@ -97,7 +98,8 @@ open class SessionConfig {
             mcpServers = mcpRegistry.servers.mapValues { (_, server) -> server.deepCopy() },
             jsonCodec = codec,
             headers = _headers.toMap(),
-            maxTokens = maxTokens
+            maxTokens = maxTokens,
+            llmIdleTimeoutSeconds = llmIdleTimeoutSeconds
         )
     }
 
@@ -120,6 +122,7 @@ open class SessionConfig {
         target.connectTimeoutSeconds = connectTimeoutSeconds
         target.readTimeoutSeconds = readTimeoutSeconds
         target.writeTimeoutSeconds = writeTimeoutSeconds
+        target.llmIdleTimeoutSeconds = llmIdleTimeoutSeconds
         target.jsonCodec = jsonCodec
         target.httpEngine = httpEngine
         target.hooksBlock = hooksBlock

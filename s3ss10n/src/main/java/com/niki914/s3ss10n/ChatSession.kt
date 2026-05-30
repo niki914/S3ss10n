@@ -61,11 +61,18 @@ class ChatSession internal constructor(
         awaitRound(
             state.runReplacingCurrent(
                 scope = scope,
-                cleanupTools = { roundRunner.cancelAndClearTools(join = true) }
+                cleanupTools = { roundRunner.cancelAndClearTools(join = true) },
+                stopHook = { keepCurrentTurn ->
+                    roundRunner.requestStop(input.roundToken, keepCurrentTurn)
+                }
             ) {
                 roundRunner.run(input)
             }
         )
+    }
+
+    override suspend fun stop(keepCurrentTurn: Boolean) {
+        state.stopCurrentRound(keepCurrentTurn)
     }
 
     override suspend fun update(block: SessionConfig.Builder.() -> Unit) {

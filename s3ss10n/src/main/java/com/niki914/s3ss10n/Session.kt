@@ -16,6 +16,8 @@ interface Session {
         this@Session.send(text) { send(it) }
     }
 
+    suspend fun stop(keepCurrentTurn: Boolean = false)
+
     suspend fun getHistory(): List<ChatTurn>
 
     suspend fun resetConversation()

@@ -7,13 +7,22 @@ import com.niki914.s3ss10n.net.SseLineParser
 import com.niki914.s3ss10n.util.HistoryKeeper
 import com.niki914.s3ss10n.util.ToolCallWaiter
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 internal data class RoundInput(
     val snapshot: SessionSnapshot,
     val initialInput: String,
-    val onEvent: suspend (SessionEvent) -> Unit
+    val onEvent: suspend (SessionEvent) -> Unit,
+    val roundToken: Any = Any()
 )
 
 internal class RoundRunner(
@@ -23,19 +32,80 @@ internal class RoundRunner(
     private val toolCallCoordinator: ToolCallCoordinator,
     private val scope: CoroutineScope
 ) {
+    private val activeMutex = Mutex()
+    private var activeContext: RoundContext? = null
+    private var pendingStopRequest: PendingStopRequest? = null
     private val toolCallWaiter = ToolCallWaiter<RoundContext>(scope) { toolCall, ctx ->
         toolCallCoordinator.handle(toolCall, ctx.snapshot) { event ->
             emitCoordinatorEvent(ctx, event)
         }
     }
 
-    internal suspend fun run(input: RoundInput) {
+    internal suspend fun run(input: RoundInput) = coroutineScope {
         val ctx = RoundContext(
             snapshot = input.snapshot,
             onEvent = input.onEvent,
-            initialInput = input.initialInput
+            initialInput = input.initialInput,
+            roundToken = input.roundToken
         )
-        doRound(ctx, input.initialInput)
+        val collector = async(start = CoroutineStart.LAZY) {
+            doRound(ctx, input.initialInput)
+        }
+        ctx.collectorJob = collector
+        activeMutex.withLock {
+            pendingStopRequest?.takeIf { it.roundToken === input.roundToken }?.let {
+                ctx.activeStopRequest = it.request
+                pendingStopRequest = null
+            }
+            activeContext = ctx
+        }
+        if (ctx.activeStopRequest != null) {
+            finishRound(ctx, SessionEvent.FinishReason.Stopped)
+            return@coroutineScope
+        }
+        collector.start()
+        resetIdleWatcher(ctx)
+        try {
+            collector.await()
+        } catch (ce: CancellationException) {
+            ctx.terminalFailure?.let { throw it }
+            if (ctx.activeStopRequest == null) {
+                throw ce
+            }
+        } finally {
+            if (ctx.activeStopRequest?.reason != SessionEvent.FinishReason.IdleTimeout) {
+                ctx.idleWatcher?.cancel()
+            }
+            activeMutex.withLock {
+                if (activeContext === ctx) {
+                    activeContext = null
+                }
+            }
+        }
+    }
+
+    internal suspend fun requestStop(roundToken: Any, keepCurrentTurn: Boolean) {
+        val request = StopRequest(
+            keepCurrentTurn = keepCurrentTurn,
+            reason = SessionEvent.FinishReason.Stopped
+        )
+        val ctx = activeMutex.withLock {
+            val active = activeContext
+            if (active == null) {
+                pendingStopRequest = PendingStopRequest(roundToken, request)
+                return
+            }
+            if (active.roundToken !== roundToken) {
+                return
+            }
+            active
+        }
+        ctx.activeStopRequest = request
+        ctx.collectorJob?.cancel(RoundStopException(request))
+        toolCallWaiter.cancelAndClear(join = true)
+        rollbackCurrentTurn(ctx)
+        commitPartialTurnForStopIfNeeded(ctx, keepCurrentTurn)
+        finishRound(ctx, request.reason)
     }
 
     internal suspend fun cancelAndClearTools(join: Boolean = false) {
@@ -56,7 +126,7 @@ internal class RoundRunner(
                         cause = t
                     )
                 )
-                finishRoundIfStarted(ctx)
+                finishRound(ctx, SessionEvent.FinishReason.Error)
             }
         }) {
             ensureConfigValid(ctx.snapshot)
@@ -137,14 +207,14 @@ internal class RoundRunner(
                 reasoningSignature = reasoningSignature
             )
             if (!committed) {
-                finishRoundIfStarted(ctx)
+                finishRound(ctx, SessionEvent.FinishReason.Error)
                 return@xTrySuspend
             }
 
             if (!toolCallWaiter.isEmpty()) {
                 responseToolCalls(ctx)
             } else {
-                finishRoundIfStarted(ctx)
+                finishRound(ctx, finalReasonFor(ctx))
             }
         }
     }
@@ -155,20 +225,102 @@ internal class RoundRunner(
         ctx.hasStarted = true
     }
 
-    private suspend fun finishRoundIfStarted(ctx: RoundContext) {
-        if (!ctx.hasStarted || ctx.hasCompleted) return
-        emitRoundEvent(
-            ctx,
+    private suspend fun finishRound(
+        ctx: RoundContext,
+        reason: SessionEvent.FinishReason
+    ) {
+        val event = ctx.eventMutex.withLock {
+            if (ctx.hasCompleted) return
+            ctx.hasCompleted = true
             SessionEvent.RoundCompleted(
-                fullText = ctx.textAccumulator.toString()
+                fullText = ctx.textAccumulator.toString(),
+                finishReason = reason
             )
-        )
-        ctx.hasCompleted = true
+        }
+        try {
+            ctx.onEvent(event)
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (t: Throwable) {
+            throw RoundEventCallbackException(t)
+        } finally {
+            ctx.idleWatcher?.cancel()
+        }
     }
 
-    private suspend fun emitRoundError(ctx: RoundContext, event: SessionEvent.Error) {
+    private suspend fun emitIdleTimeout(ctx: RoundContext, timeoutSeconds: Long) {
+        val request = StopRequest(
+            keepCurrentTurn = false,
+            reason = SessionEvent.FinishReason.IdleTimeout
+        )
+        ctx.activeStopRequest = request
+        try {
+            rollbackCurrentTurn(ctx)
+            emitRoundError(
+                ctx,
+                SessionEvent.Error(
+                    stage = SessionEvent.Stage.Session,
+                    message = "LLM idle timeout: no session event for $timeoutSeconds seconds"
+                ),
+                resetIdle = false
+            )
+            finishRound(ctx, request.reason)
+        } catch (t: Throwable) {
+            ctx.terminalFailure = if (t is RoundEventCallbackException) t.original else t
+        } finally {
+            ctx.collectorJob?.cancel(RoundStopException(request))
+            toolCallWaiter.cancelAndClear(join = true)
+        }
+    }
+
+    private fun resetIdleWatcher(ctx: RoundContext) {
+        val timeoutSeconds = ctx.snapshot.llmIdleTimeoutSeconds
+        if (timeoutSeconds == null || timeoutSeconds <= 0 || ctx.hasCompleted) return
+        ctx.idleWatcher?.cancel()
+        ctx.idleWatcher = scope.launch {
+            delay(timeoutSeconds * 1000)
+            emitIdleTimeout(ctx, timeoutSeconds)
+        }
+    }
+
+    private suspend fun commitPartialTurnForStopIfNeeded(
+        ctx: RoundContext,
+        keepCurrentTurn: Boolean
+    ) {
+        if (
+            !keepCurrentTurn ||
+            ctx.textAccumulator.isBlank() ||
+            ctx.hasCompleted ||
+            ctx.stopPartialCommitted
+        ) return
+        if (!ctx.committedInitialUser) {
+            historyKeeper.add(ChatTurn.User(ctx.initialInput))
+            ctx.committedInitialUser = true
+            ctx.committedTurnCount += 1
+        }
+        historyKeeper.add(
+            ChatTurn.Assistant(
+                content = ctx.textAccumulator.toString()
+            )
+        )
+        ctx.committedTurnCount += 1
+        ctx.stopPartialCommitted = true
+    }
+
+    private suspend fun rollbackCurrentTurn(ctx: RoundContext) {
+        if (ctx.committedTurnCount <= 0) return
+        historyKeeper.dropLast(ctx.committedTurnCount)
+        ctx.committedTurnCount = 0
+        ctx.committedInitialUser = false
+    }
+
+    private suspend fun emitRoundError(
+        ctx: RoundContext,
+        event: SessionEvent.Error,
+        resetIdle: Boolean = true
+    ) {
         ctx.hasError = true
-        emitRoundEvent(ctx, event)
+        emitRoundEvent(ctx, event, resetIdle)
     }
 
     private suspend fun emitCoordinatorEvent(ctx: RoundContext, event: SessionEvent) {
@@ -179,13 +331,22 @@ internal class RoundRunner(
         }
     }
 
-    private suspend fun emitRoundEvent(ctx: RoundContext, event: SessionEvent) {
+    private suspend fun emitRoundEvent(
+        ctx: RoundContext,
+        event: SessionEvent,
+        resetIdle: Boolean = true
+    ) {
+        val shouldEmit = ctx.eventMutex.withLock { !ctx.hasCompleted }
+        if (!shouldEmit) return
         try {
             ctx.onEvent(event)
         } catch (ce: CancellationException) {
             throw ce
         } catch (t: Throwable) {
             throw RoundEventCallbackException(t)
+        }
+        if (resetIdle && event !is SessionEvent.RoundCompleted) {
+            resetIdleWatcher(ctx)
         }
     }
 
@@ -221,6 +382,8 @@ internal class RoundRunner(
 
         if (userInput != null) {
             historyKeeper.add(ChatTurn.User(userInput))
+            ctx.committedInitialUser = true
+            ctx.committedTurnCount += 1
         }
         historyKeeper.add(
             ChatTurn.Assistant(
@@ -230,6 +393,7 @@ internal class RoundRunner(
                 reasoningSignature = reasoningSignature
             )
         )
+        ctx.committedTurnCount += 1
         return true
     }
 
@@ -243,8 +407,17 @@ internal class RoundRunner(
                     resultJson = msg.contentJson
                 )
             )
+            ctx.committedTurnCount += 1
         }
         doRound(ctx, null)
+    }
+
+    private fun finalReasonFor(ctx: RoundContext): SessionEvent.FinishReason {
+        return if (ctx.hasError) {
+            SessionEvent.FinishReason.Error
+        } else {
+            SessionEvent.FinishReason.Completed
+        }
     }
 
     private fun ensureConfigValid(snapshot: SessionSnapshot) {
@@ -285,11 +458,34 @@ private class RoundContext(
     val snapshot: SessionSnapshot,
     val onEvent: suspend (SessionEvent) -> Unit,
     val initialInput: String,
+    val roundToken: Any,
     val textAccumulator: StringBuilder = StringBuilder(),
     var hasStarted: Boolean = false,
     var hasCompleted: Boolean = false,
-    var hasError: Boolean = false
+    var hasError: Boolean = false,
+    var committedInitialUser: Boolean = false,
+    var committedTurnCount: Int = 0,
+    var stopPartialCommitted: Boolean = false,
+    var activeStopRequest: StopRequest? = null,
+    var terminalFailure: Throwable? = null,
+    var idleWatcher: Job? = null,
+    var collectorJob: Job? = null,
+    val eventMutex: Mutex = Mutex()
 )
+
+private data class StopRequest(
+    val keepCurrentTurn: Boolean,
+    val reason: SessionEvent.FinishReason
+)
+
+private data class PendingStopRequest(
+    val roundToken: Any,
+    val request: StopRequest
+)
+
+private class RoundStopException(
+    val request: StopRequest
+) : CancellationException("Round stopped")
 
 private class RoundEventCallbackException(
     val original: Throwable

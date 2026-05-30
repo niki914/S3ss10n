@@ -16,7 +16,8 @@ data class SessionSnapshot(
     val mcpServers: Map<String, McpServerConfig>,
     val jsonCodec: JsonCodec,
     val headers: Map<String, String>,
-    val maxTokens: Int
+    val maxTokens: Int,
+    val llmIdleTimeoutSeconds: Long? = null
 ) {
     fun mcpServer(name: String): McpServerConfig? = mcpServers[name]
 }
