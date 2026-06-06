@@ -11,12 +11,14 @@ import com.niki914.s3ss10n.SessionProtocols
 import com.niki914.s3ss10n.ToolCallKind
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import org.json.JSONObject
 import java.util.UUID
 
 data class McpServerEntry(
     val id: String = UUID.randomUUID().toString(),
     val name: String,
-    val url: String
+    val url: String,
+    val headers: Map<String, String> = emptyMap()
 )
 
 data class DemoTurn(
@@ -40,7 +42,7 @@ sealed interface ChatIntent {
         val block: (SessionConfig.() -> Unit)
     ) : ChatIntent
     data class SetProtocol(val protocol: String) : ChatIntent
-    data class AddMcpServer(val name: String, val url: String) : ChatIntent
+    data class AddMcpServer(val name: String, val url: String, val headersJson: String) : ChatIntent
     data class RemoveMcpServer(val id: String) : ChatIntent
     data object NewRoom : ChatIntent
 }
@@ -74,8 +76,18 @@ class ChatViewModel
             }
 
             is ChatIntent.AddMcpServer -> {
+                val headers = runCatching { parseHeadersJson(intent.headersJson) }.getOrElse { error ->
+                    sendEffect(ChatEffect.ErrorOccurred("Invalid MCP headers JSON: ${error.message}"))
+                    return
+                }
                 updateState {
-                    copy(mcpServers = mcpServers + McpServerEntry(name = intent.name, url = intent.url))
+                    copy(
+                        mcpServers = mcpServers + McpServerEntry(
+                            name = intent.name,
+                            url = intent.url,
+                            headers = headers
+                        )
+                    )
                 }
             }
 
@@ -123,6 +135,7 @@ class ChatViewModel
                     mcp {
                         currentState.mcpServers.forEach { server ->
                             add(server.name) {
+                                headers = server.headers
                                 http { url = server.url }
                             }
                         }
@@ -223,6 +236,15 @@ class ChatViewModel
                     }
                 }
             }
+        }
+    }
+
+    private fun parseHeadersJson(raw: String): Map<String, String> {
+        val trimmed = raw.trim()
+        if (trimmed.isEmpty()) return emptyMap()
+        val json = JSONObject(trimmed)
+        return json.keys().asSequence().associateWith { key ->
+            json.getString(key)
         }
     }
 }

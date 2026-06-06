@@ -3,6 +3,7 @@ package com.niki914.s3ss10n
 import com.niki914.s3ss10n.ext.json.GsonJsonCodec
 import com.niki914.s3ss10n.ext.protocol.ProtocolEvent
 import com.niki914.s3ss10n.json.JsonCodec
+import com.niki914.s3ss10n.net.HttpFrame
 import com.niki914.s3ss10n.net.HttpTimeouts
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -85,6 +86,38 @@ class SessionFlowRegressionTest {
                 ),
                 session.getHistory()
             )
+        } finally {
+            session.close()
+        }
+    }
+
+    @Test
+    fun `RoundRunner 将网络帧 payload 传给 ChatProtocol`() = runBlocking {
+        val receivedPayloads = mutableListOf<String>()
+        val protocol = RecordingChatProtocol { payloads ->
+            flow {
+                val values = payloads.toList()
+                receivedPayloads += values
+                values.forEach { emit(ProtocolEvent.TextDelta(it)) }
+                emit(ProtocolEvent.Completed)
+            }
+        }
+        val engine = FakeHttpEngine(
+            frameHandler = {
+                flowOf(
+                    HttpFrame.SseData(value = "hello", event = "message"),
+                    HttpFrame.SseData(value = " world", event = "message")
+                )
+            }
+        )
+        val session = newChatSession(protocol = protocol, engine = engine)
+
+        try {
+            val events = session.send("hi").toList()
+
+            assertEquals(listOf("hello", " world"), receivedPayloads)
+            assertEquals(SessionEvent.RoundCompleted(fullText = "hello world"), events.last())
+            assertEquals(1, engine.frameRequests.size)
         } finally {
             session.close()
         }
@@ -976,7 +1009,7 @@ class SessionFlowRegressionTest {
             session.refreshMcpTools()
             val events = session.send("hi").toList()
 
-            assertTrue(engine.unaryCalls.any { it == "https://mcp.ok" to "tools/call" })
+            assertTrue(engine.frameCalls.any { it == "https://mcp.ok" to "tools/call" })
             assertEquals(
                 SessionEvent.ToolRunning(
                     callId = "call-1",
@@ -1028,7 +1061,7 @@ class SessionFlowRegressionTest {
             val error = events.filterIsInstance<SessionEvent.Error>().single()
             val toolResult = protocol.lastHistory.last() as ChatTurn.ToolResult
 
-            assertTrue(engine.unaryCalls.any { it == "https://mcp.ok" to "tools/call" })
+            assertTrue(engine.frameCalls.any { it == "https://mcp.ok" to "tools/call" })
             assertEquals(ToolCallKind.Mcp("docs"), failed.kind)
             assertEquals("remote_search", failed.toolName)
             assertEquals("mcp boom", failed.message)
@@ -1415,8 +1448,8 @@ class SessionFlowRegressionTest {
                 ),
                 snapshot.headers
             )
-            assertEquals("updated", engine.streamRequests.single().headers["X-Trace"])
-            assertEquals("new", engine.streamRequests.single().headers["X-New"])
+            assertEquals("updated", engine.frameRequests.single().headers["X-Trace"])
+            assertEquals("new", engine.frameRequests.single().headers["X-New"])
         } finally {
             session.close()
         }
@@ -1508,7 +1541,7 @@ class SessionFlowRegressionTest {
 
         try {
             session.send("hi").toList()
-            val headers = engine.streamRequests.single().headers
+            val headers = engine.frameRequests.single().headers
 
             assertFalse(headers.containsKey("Authorization"))
             assertEquals("Bearer custom", headers["authorization"])
@@ -1536,8 +1569,8 @@ class SessionFlowRegressionTest {
             }
             session.send("hi").toList()
 
-            assertEquals(2, initialEngine.streamRequests.size)
-            assertEquals(0, updatedEngine.streamRequests.size)
+            assertEquals(2, initialEngine.frameRequests.size)
+            assertEquals(0, updatedEngine.frameRequests.size)
             assertSame(initialCodec, protocol.lastSnapshot?.jsonCodec)
             assertTrue(
                 protocol.lastHistory

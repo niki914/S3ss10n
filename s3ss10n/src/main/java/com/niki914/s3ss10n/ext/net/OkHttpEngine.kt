@@ -1,12 +1,18 @@
 package com.niki914.s3ss10n.ext.net
 
 import com.niki914.s3ss10n.net.HttpEngine
+import com.niki914.s3ss10n.net.HttpFrame
 import com.niki914.s3ss10n.net.HttpRequest
+import com.niki914.s3ss10n.net.SseLineParser
 import com.niki914.s3ss10n.xTry
 import com.niki914.s3ss10n.xTrySuspend
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.flow
 import okhttp3.Headers.Companion.toHeaders
 import okhttp3.Call
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
@@ -76,6 +82,86 @@ class OkHttpEngine : HttpEngine {
                         }
                     }
                     activeCalls.remove(call)
+                }
+            })
+
+            awaitClose {
+                call.cancel()
+                activeCalls.remove(call)
+            }
+        }
+    }
+
+    override fun frames(request: HttpRequest): Flow<HttpFrame> = callbackFlow {
+        xTrySuspend("OkHttpEngine.frames", onError = { e ->
+            close(e)
+        }) {
+            val callClient = client.newBuilder()
+                .connectTimeout(request.timeoutMs.connectMs, TimeUnit.MILLISECONDS)
+                .readTimeout(request.timeoutMs.readMs, TimeUnit.MILLISECONDS)
+                .writeTimeout(request.timeoutMs.writeMs, TimeUnit.MILLISECONDS)
+                .build()
+
+            val requestBody = request.body?.toRequestBody("application/json".toMediaTypeOrNull())
+            val okHttpRequest = Request.Builder()
+                .url(request.url)
+                .method(request.method, requestBody)
+                .headers(request.headers.toHeaders())
+                .build()
+
+            val call = callClient.newCall(okHttpRequest)
+            activeCalls.add(call)
+            call.enqueue(object : okhttp3.Callback {
+                override fun onFailure(call: Call, e: java.io.IOException) {
+                    activeCalls.remove(call)
+                    close(e)
+                }
+
+                override fun onResponse(call: Call, response: okhttp3.Response) {
+                    launch(Dispatchers.IO) {
+                        try {
+                            xTrySuspend("OkHttpEngine.frames.onResponse", onError = { t ->
+                                close(t)
+                            }) {
+                                response.use { currentResponse ->
+                                    if (!currentResponse.isSuccessful) {
+                                        val responseBody = currentResponse.body?.string()?.trim().orEmpty()
+                                        val bodySuffix = if (responseBody.isEmpty()) {
+                                            ""
+                                        } else {
+                                            ", body=$responseBody"
+                                        }
+                                        close(
+                                            IllegalStateException(
+                                                "HTTP ${currentResponse.code} ${currentResponse.message}$bodySuffix"
+                                            )
+                                        )
+                                        return@xTrySuspend
+                                    }
+                                    val body = currentResponse.body ?: run {
+                                        close(IllegalStateException("Response body is null"))
+                                        return@xTrySuspend
+                                    }
+                                    val contentType = currentResponse.header("Content-Type").orEmpty()
+                                    if (contentType.contains("text/event-stream", ignoreCase = true)) {
+                                        body.charStream().buffered().useLines { lines ->
+                                            val rawLines = flow {
+                                                lines.forEach { line -> emit(line) }
+                                            }
+                                            SseLineParser.parseEvents(rawLines).collect { event ->
+                                                trySend(HttpFrame.SseData(event.data, event.event))
+                                            }
+                                        }
+                                    } else {
+                                        trySend(HttpFrame.Text(body.string()))
+                                    }
+                                    close()
+                                }
+                            }
+                        } finally {
+                            activeCalls.remove(call)
+                        }
+                    }
                 }
             })
 

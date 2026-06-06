@@ -286,7 +286,9 @@ fun DemoChatScreen(vm: ChatViewModel) {
                 onApiKeyChange = { apiKey = it },
                 onModelChange = { model = it },
                 onSystemPromptChange = { systemPrompt = it },
-                onAddMcpServer = { name, url -> vm.sendIntent(ChatIntent.AddMcpServer(name, url)) },
+                onAddMcpServer = { name, url, headersJson ->
+                    vm.sendIntent(ChatIntent.AddMcpServer(name, url, headersJson))
+                },
                 onRemoveMcpServer = { id -> vm.sendIntent(ChatIntent.RemoveMcpServer(id)) },
                 onApply = applyConfig,
                 onDismiss = { showConfig = false }
@@ -308,7 +310,7 @@ private fun ConfigSheet(
     onApiKeyChange: (String) -> Unit,
     onModelChange: (String) -> Unit,
     onSystemPromptChange: (String) -> Unit,
-    onAddMcpServer: (String, String) -> Unit,
+    onAddMcpServer: (String, String, String) -> Unit,
     onRemoveMcpServer: (String) -> Unit,
     onApply: () -> Unit,
     onDismiss: () -> Unit
@@ -438,6 +440,14 @@ private fun ConfigSheet(
                                 style = MaterialTheme.typography.labelSmall,
                                 maxLines = 1
                             )
+                            if (server.headers.isNotEmpty()) {
+                                Text(
+                                    "Headers: ${server.headers.keys.joinToString()}",
+                                    color = Color.White.copy(alpha = 0.4f),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    maxLines = 1
+                                )
+                            }
                         }
                         IconButton(onClick = { onRemoveMcpServer(server.id) }) {
                             Icon(
@@ -452,6 +462,30 @@ private fun ConfigSheet(
                 // Add MCP form
                 var newMcpName by remember { mutableStateOf("") }
                 var newMcpUrl by remember { mutableStateOf("") }
+                var newMcpHeaders by remember { mutableStateOf("") }
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    TextButton(
+                        onClick = {
+                            newMcpName = "github"
+                            newMcpUrl = "https://api.githubcopilot.com/mcp/"
+                            newMcpHeaders = GITHUB_MCP_HEADERS_TEMPLATE
+                        }
+                    ) {
+                        Text("GitHub MCP (SSE)", color = Color.White)
+                    }
+                    TextButton(
+                        onClick = {
+                            newMcpName = "aslocate"
+                            newMcpUrl = "http://127.0.0.1:51338/mcp"
+                            newMcpHeaders = ""
+                        }
+                    ) {
+                        Text("aslocate MCP", color = Color.White)
+                    }
+                }
                 Row(
                     Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -493,9 +527,10 @@ private fun ConfigSheet(
                             )
                             .clickable(role = androidx.compose.ui.semantics.Role.Button) {
                                 if (newMcpName.isNotBlank() && newMcpUrl.isNotBlank()) {
-                                    onAddMcpServer(newMcpName.trim(), newMcpUrl.trim())
+                                    onAddMcpServer(newMcpName.trim(), newMcpUrl.trim(), newMcpHeaders.trim())
                                     newMcpName = ""
                                     newMcpUrl = ""
+                                    newMcpHeaders = ""
                                 }
                             }
                             .padding(8.dp),
@@ -509,6 +544,15 @@ private fun ConfigSheet(
                         )
                     }
                 }
+                OutlinedTextField(
+                    value = newMcpHeaders,
+                    onValueChange = { newMcpHeaders = it },
+                    label = { Text("Headers JSON", color = Color.White.copy(alpha = 0.5f)) },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 2,
+                    colors = glassTextFieldColors(),
+                    textStyle = MaterialTheme.typography.bodySmall
+                )
 
                 // Action buttons
                 Row(
@@ -835,6 +879,13 @@ private fun buildUiItems(pairs: List<DemoTurn>): List<UiItem> {
     }
     return out
 }
+
+private const val GITHUB_MCP_HEADERS_TEMPLATE = """
+{
+  "Authorization": "Bearer <paste_github_token>",
+  "Accept": "application/json, text/event-stream"
+}
+"""
 
 /**
  * Preview only.

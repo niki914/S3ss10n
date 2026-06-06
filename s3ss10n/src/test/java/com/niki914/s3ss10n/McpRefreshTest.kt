@@ -1,5 +1,6 @@
 package com.niki914.s3ss10n
 
+import com.niki914.s3ss10n.ext.json.GsonJsonCodec
 import com.niki914.s3ss10n.ext.protocol.ProtocolEvent
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
@@ -14,6 +15,54 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class McpRefreshTest {
+    @Test
+    fun `HttpMcpClient tools list 支持普通 JSON response`() = runBlocking {
+        val expectedTool = remoteSearchTool()
+        val engine = FakeMcpHttpEngine(
+            toolsByUrl = mapOf("https://mcp.text" to listOf(expectedTool))
+        )
+        val client = HttpMcpClient(engine = engine, codec = GsonJsonCodec())
+
+        val tools = client.listTools(mcpServer("https://mcp.text"))
+
+        assertEquals(listOf(expectedTool), tools)
+        assertTrue(engine.frameCalls.any { it == "https://mcp.text" to "tools/list" })
+    }
+
+    @Test
+    fun `HttpMcpClient tools list 支持 SSE data JSON response`() = runBlocking {
+        val expectedTool = remoteSearchTool()
+        val engine = FakeMcpHttpEngine(
+            toolsByUrl = mapOf("https://mcp.sse" to listOf(expectedTool)),
+            sseMethodsByUrl = mapOf("https://mcp.sse" to setOf("tools/list"))
+        )
+        val client = HttpMcpClient(engine = engine, codec = GsonJsonCodec())
+
+        val tools = client.listTools(mcpServer("https://mcp.sse"))
+
+        assertEquals(listOf(expectedTool), tools)
+        assertTrue(engine.frameCalls.any { it == "https://mcp.sse" to "tools/list" })
+    }
+
+    @Test
+    fun `HttpMcpClient tools call 支持 SSE data JSON response`() = runBlocking {
+        val engine = FakeMcpHttpEngine(
+            toolsByUrl = mapOf("https://mcp.call-sse" to listOf(remoteSearchTool())),
+            toolCallResultsByUrl = mapOf("https://mcp.call-sse" to """{"answer":"remote-ok"}"""),
+            sseMethodsByUrl = mapOf("https://mcp.call-sse" to setOf("tools/call"))
+        )
+        val client = HttpMcpClient(engine = engine, codec = GsonJsonCodec())
+
+        val result = client.call(
+            server = mcpServer("https://mcp.call-sse"),
+            toolName = "remote_search",
+            argumentsJson = """{"query":"hi"}"""
+        )
+
+        assertEquals("""{"answer":"remote-ok"}""", result)
+        assertTrue(engine.frameCalls.any { it == "https://mcp.call-sse" to "tools/call" })
+    }
+
     @Test
     fun `refreshMcpTools 成功后 下一轮可以看到发现的工具`() = runBlocking {
         val engine = FakeMcpHttpEngine(
@@ -424,7 +473,7 @@ class McpRefreshTest {
             assertEquals(0, result.discoveredToolCount)
             assertEquals(
                 0,
-                engine.unaryCalls.count {
+                engine.frameCalls.count {
                     it.first == "https://mcp.disabled" && it.second == "tools/list"
                 }
             )
@@ -478,7 +527,7 @@ class McpRefreshTest {
             assertTrue(results.all { it.isSuccess })
             assertEquals(
                 1,
-                engine.unaryCalls.count { it.first == "https://mcp.ok" && it.second == "tools/list" }
+                engine.frameCalls.count { it.first == "https://mcp.ok" && it.second == "tools/list" }
             )
         } finally {
             session.close()
@@ -641,5 +690,17 @@ class McpRefreshTest {
         } finally {
             session.close()
         }
+    }
+
+    private fun mcpServer(url: String): McpServerConfig {
+        return McpServerConfig(transport = McpTransport.Http(url))
+    }
+
+    private fun remoteSearchTool(): McpDiscoveredTool {
+        return McpDiscoveredTool(
+            name = "remote_search",
+            description = "search docs",
+            inputSchema = mapOf("type" to "object")
+        )
     }
 }

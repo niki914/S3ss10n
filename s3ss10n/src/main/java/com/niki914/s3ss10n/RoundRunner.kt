@@ -3,7 +3,7 @@ package com.niki914.s3ss10n
 import com.niki914.s3ss10n.ext.protocol.ChatProtocol
 import com.niki914.s3ss10n.ext.protocol.ProtocolEvent
 import com.niki914.s3ss10n.net.HttpEngine
-import com.niki914.s3ss10n.net.SseLineParser
+import com.niki914.s3ss10n.net.HttpFrame
 import com.niki914.s3ss10n.util.HistoryKeeper
 import com.niki914.s3ss10n.util.ToolCallWaiter
 import kotlinx.coroutines.CancellationException
@@ -14,6 +14,8 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.mapNotNull
+import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -148,9 +150,10 @@ internal class RoundRunner(
             )
             val effectiveReq = req.copy(headers = req.headers + mergedAuthAndCustom)
 
-            val rawFlow = engine.stream(effectiveReq)
-            val sseData = SseLineParser.parse(rawFlow)
-            protocol.parseStream(sseData).collect { event ->
+            val payloadFlow = engine.frames(effectiveReq)
+                .mapNotNull { it.payloadOrNull() }
+                .takeWhile { it != "[DONE]" }
+            protocol.parseStream(payloadFlow).collect { event ->
                 startRoundIfNeeded(ctx)
                 when (event) {
                     is ProtocolEvent.TextDelta -> {
@@ -452,6 +455,11 @@ internal class RoundRunner(
             else -> SessionEvent.Stage.Transport
         }
     }
+}
+
+private fun HttpFrame.payloadOrNull(): String? = when (this) {
+    is HttpFrame.SseData -> value
+    is HttpFrame.Text -> value.takeIf { it.isNotBlank() }
 }
 
 private class RoundContext(

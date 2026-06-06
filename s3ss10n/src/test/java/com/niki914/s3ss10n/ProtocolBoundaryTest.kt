@@ -4,6 +4,8 @@ import com.niki914.s3ss10n.ext.json.GsonJsonCodec
 import com.niki914.s3ss10n.ext.protocol.ProtocolEvent
 import com.niki914.s3ss10n.ext.protocol.anthropic.AnthropicProtocol
 import com.niki914.s3ss10n.ext.protocol.openai.OpenAIProtocol
+import com.niki914.s3ss10n.net.SseEvent
+import com.niki914.s3ss10n.net.SseLineParser
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
@@ -178,6 +180,45 @@ class ProtocolBoundaryTest {
             expected,
             AnthropicProtocol(GsonJsonCodec()).encodeToolResult("call-1", "lookup", """{"ok":true}""")
         )
+    }
+
+    @Test
+    fun `SSE parseEvents 支持 event 多行 data 和注释行`() = runBlocking {
+        val events = SseLineParser.parseEvents(
+            flowOf(
+                ": keep-alive",
+                "event: message",
+                "data: a",
+                "data: b",
+                "",
+                "data: tail",
+                ""
+            )
+        ).toList()
+
+        assertEquals(
+            listOf(
+                SseEvent(event = "message", data = "a\nb"),
+                SseEvent(event = null, data = "tail")
+            ),
+            events
+        )
+    }
+
+    @Test
+    fun `SSE parse 遇到 DONE 后停止输出`() = runBlocking {
+        val payloads = SseLineParser.parse(
+            flowOf(
+                "data: first",
+                "",
+                "data: [DONE]",
+                "",
+                "data: ignored",
+                ""
+            )
+        ).toList()
+
+        assertEquals(listOf("first"), payloads)
     }
 
     private suspend fun collectOpenAIEvents(vararg frames: String): List<ProtocolEvent> {
