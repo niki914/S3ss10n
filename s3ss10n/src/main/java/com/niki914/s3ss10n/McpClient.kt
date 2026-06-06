@@ -139,7 +139,7 @@ internal class HttpMcpClient(
             params = mapOf(
                 "protocolVersion" to "2025-06-18",
                 "capabilities" to emptyMap<String, Any?>(),
-                "clientInfo" to mapOf("name" to "com.niki914.s3ss10n", "version" to "2.0.2")
+                "clientInfo" to mapOf("name" to "com.niki914.s3ss10n", "version" to "2.1.2")
             )
         )
         if (initRoot["error"] != null) {
