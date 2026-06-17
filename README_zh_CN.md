@@ -30,7 +30,7 @@ dependencyResolutionManagement {
 
 ```kotlin
 dependencies {
-    implementation("com.github.niki914:s3ss10n:2.1.3")
+    implementation("com.github.niki914:s3ss10n:2.1.5")
 }
 ```
 
