@@ -36,7 +36,7 @@ dependencyResolutionManagement {
 
 ```kotlin
 dependencies {
-    implementation("com.github.niki914:s3ss10n:2.1.2")
+    implementation("com.github.niki914:s3ss10n:2.1.3")
 }
 ```
 
@@ -222,6 +222,7 @@ interface Session {
     suspend fun refreshMcpTools(): McpRefreshResult
     suspend fun getMcpDiscoverySnapshot(): McpDiscoverySnapshot
     suspend fun getHistory(): List<ChatTurn>
+    suspend fun replaceHistory(history: List<ChatTurn>)
     suspend fun resetConversation()
     suspend fun close()
 }
@@ -233,8 +234,28 @@ interface Session {
 - `refreshMcpTools`: synchronously refresh MCP discovery for the currently enabled servers. Use this when you need the latest MCP tools to be visible to the next `send()`.
 - `getMcpDiscoverySnapshot`: read the current MCP discovery status and final tool registry diagnostics without starting network discovery.
 - `getHistory`: returns the conversation history (`ChatTurn.User`, `ChatTurn.Assistant`, `ChatTurn.ToolResult`).
+- `replaceHistory`: replace the current conversation history. This does not restore old `SessionConfig`, system prompt, model, provider, or tool configuration. `ChatTurn.System` entries in the input are filtered out. If a round is running, it is cancelled and pending tool calls are cleared before the history is replaced. The next `send()` uses the replaced history plus the latest session config.
 - `resetConversation`: clear history. Use when switching model, MCP servers, or starting a new conversation.
 - `close`: release session resources.
+
+### Persisting and restoring history
+
+Use `replaceHistory(history)` when your app loads conversation history from storage. The method is overwrite-only: it does not merge with or append to existing history.
+
+Do not store history as plain text only. To restore tool conversations, persist the full domain model:
+
+- `ChatTurn.User.content`
+- `ChatTurn.Assistant.content`
+- `ChatTurn.Assistant.reasoningContent`
+- `ChatTurn.Assistant.reasoningSignature`
+- `ChatTurn.Assistant.toolCalls[*].callId`
+- `ChatTurn.Assistant.toolCalls[*].toolName`
+- `ChatTurn.Assistant.toolCalls[*].argumentsJson`
+- `ChatTurn.ToolResult.callId`
+- `ChatTurn.ToolResult.toolName`
+- `ChatTurn.ToolResult.resultJson`
+
+Assistant tool calls and following tool results must keep their original order and matching `callId`. If tool history is incomplete, reordered, or has mismatched IDs, the provider may reject the next request.
 
 ## SessionEvent
 

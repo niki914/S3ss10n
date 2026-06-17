@@ -93,10 +93,20 @@ class ChatSession internal constructor(
     }
 
     override suspend fun resetConversation() {
-        state.cancelCurrentRound {
-            roundRunner.cancelAndClearTools(join = true)
+        state.cancelCurrentRoundAndRun(
+            cleanupTools = { roundRunner.cancelAndClearTools(join = true) }
+        ) {
+            historyKeeper.clear()
         }
-        historyKeeper.clear()
+    }
+
+    override suspend fun replaceHistory(history: List<ChatTurn>) {
+        state.cancelCurrentRoundAndRun(
+            cleanupTools = { roundRunner.cancelAndClearTools(join = true) }
+        ) {
+            val sanitized = history.filterNot { it is ChatTurn.System }
+            historyKeeper.replace(sanitized)
+        }
     }
 
     override suspend fun close() {

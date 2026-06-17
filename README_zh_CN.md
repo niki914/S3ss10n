@@ -30,7 +30,7 @@ dependencyResolutionManagement {
 
 ```kotlin
 dependencies {
-    implementation("com.github.niki914:s3ss10n:2.1.2")
+    implementation("com.github.niki914:s3ss10n:2.1.3")
 }
 ```
 
@@ -215,6 +215,7 @@ interface Session {
     suspend fun refreshMcpTools(): McpRefreshResult
     suspend fun getMcpDiscoverySnapshot(): McpDiscoverySnapshot
     suspend fun getHistory(): List<ChatTurn>
+    suspend fun replaceHistory(history: List<ChatTurn>)
     suspend fun resetConversation()
     suspend fun close()
 }
@@ -226,8 +227,28 @@ interface Session {
 - `refreshMcpTools`：同步刷新当前已启用 MCP server 的 discovery；当你需要保证下一次 `send()` 可见最新 MCP tools 时使用
 - `getMcpDiscoverySnapshot`：只读查询当前 MCP discovery 状态和最终 tool registry 诊断，不触发网络 discovery
 - `getHistory`：返回对话历史（`ChatTurn.User`、`ChatTurn.Assistant`、`ChatTurn.ToolResult`）
+- `replaceHistory`：替换当前 session 的 conversation history。它不会恢复旧的 `SessionConfig`、system prompt、model、provider 或 tool 配置；输入里的 `ChatTurn.System` 会被过滤。若调用时已有 round 正在运行，会先取消当前 round 并清理 pending tool calls，然后再替换 history。下一次 `send()` 会使用替换后的 history 和当前最新配置。
 - `resetConversation`：清空历史，通常在切换模型、MCP 或新建对话时调用
 - `close`：释放会话资源
+
+### 持久化与恢复 history
+
+从数据库恢复会话历史时调用 `replaceHistory(history)`。这个方法是覆盖语义：不 merge、不 append，不会保留旧 history。
+
+数据库不能只保存纯文本消息。要正确恢复工具调用链路，必须完整保存 domain model 字段：
+
+- `ChatTurn.User.content`
+- `ChatTurn.Assistant.content`
+- `ChatTurn.Assistant.reasoningContent`
+- `ChatTurn.Assistant.reasoningSignature`
+- `ChatTurn.Assistant.toolCalls[*].callId`
+- `ChatTurn.Assistant.toolCalls[*].toolName`
+- `ChatTurn.Assistant.toolCalls[*].argumentsJson`
+- `ChatTurn.ToolResult.callId`
+- `ChatTurn.ToolResult.toolName`
+- `ChatTurn.ToolResult.resultJson`
+
+`Assistant.toolCalls` 与后续 `ToolResult` 必须保持原始顺序，并通过 `callId` 正确对应。如果 tool history 字段缺失、顺序错误或 `callId` 不匹配，session 不会尝试修复，下一次请求可能被 provider 拒绝。
 
 ## SessionEvent
 

@@ -119,6 +119,7 @@ internal class FakeMcpHttpEngine(
     }
 
     override fun frames(request: HttpRequest): Flow<HttpFrame> {
+        if (request.body == null && request.url == "https://example.com/chat") return emptyFlow()
         val method = rpcMethod(request)
         frameCalls += request.url to method
         return flow {

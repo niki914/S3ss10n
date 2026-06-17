@@ -4,8 +4,10 @@ import com.niki914.s3ss10n.ext.json.GsonJsonCodec
 import com.niki914.s3ss10n.ext.protocol.ProtocolEvent
 import com.niki914.s3ss10n.ext.protocol.anthropic.AnthropicProtocol
 import com.niki914.s3ss10n.ext.protocol.openai.OpenAIProtocol
+import com.niki914.s3ss10n.json.JsonCodec
 import com.niki914.s3ss10n.net.SseEvent
 import com.niki914.s3ss10n.net.SseLineParser
+import com.niki914.s3ss10n.net.HttpTimeouts
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
@@ -183,6 +185,43 @@ class ProtocolBoundaryTest {
     }
 
     @Test
+    fun `OpenAI 和 Anthropic 请求体保留 assistant tool call 与 tool result 对应关系`() {
+        val codec = GsonJsonCodec()
+        val history = listOf(
+            ChatTurn.Assistant(
+                content = "",
+                toolCalls = listOf(
+                    ToolCallSpec(
+                        callId = "call-1",
+                        toolName = "lookup",
+                        argumentsJson = """{"query":"hi"}"""
+                    )
+                )
+            ),
+            ChatTurn.ToolResult(
+                callId = "call-1",
+                toolName = "lookup",
+                resultJson = """{"ok":true}"""
+            )
+        )
+
+        val openAiBody = OpenAIProtocol(codec)
+            .buildRequest(testSnapshot(codec), history, pendingUserInput = "next")
+            .bodyString()
+        val anthropicBody = AnthropicProtocol(codec)
+            .buildRequest(testSnapshot(codec), history, pendingUserInput = "next")
+            .bodyString()
+
+        assertTrue(openAiBody.contains(""""tool_call_id":"call-1""""))
+        assertTrue(openAiBody.contains(""""id":"call-1""""))
+        assertTrue(openAiBody.contains(""""name":"lookup""""))
+        assertTrue(anthropicBody.contains(""""type":"tool_use""""))
+        assertTrue(anthropicBody.contains(""""id":"call-1""""))
+        assertTrue(anthropicBody.contains(""""type":"tool_result""""))
+        assertTrue(anthropicBody.contains(""""tool_use_id":"call-1""""))
+    }
+
+    @Test
     fun `SSE parseEvents 支持 event 多行 data 和注释行`() = runBlocking {
         val events = SseLineParser.parseEvents(
             flowOf(
@@ -227,6 +266,28 @@ class ProtocolBoundaryTest {
 
     private suspend fun collectAnthropicEvents(vararg frames: String): List<ProtocolEvent> {
         return AnthropicProtocol(GsonJsonCodec()).parseStream(flowOf(*frames)).toList()
+    }
+
+    private fun testSnapshot(codec: JsonCodec): SessionSnapshot {
+        return SessionSnapshot(
+            endpoint = "https://example.com/chat",
+            apiKey = "",
+            model = "test-model",
+            systemPrompt = null,
+            temperature = 0.7f,
+            timeouts = HttpTimeouts(connectMs = 1_000, readMs = 1_000, writeMs = 1_000),
+            hooksBlock = null,
+            appParams = emptyMap(),
+            tools = ToolCatalog(descriptors = emptyList()),
+            mcpServers = emptyMap(),
+            jsonCodec = codec,
+            headers = emptyMap(),
+            maxTokens = 4096
+        )
+    }
+
+    private fun com.niki914.s3ss10n.net.HttpRequest.bodyString(): String {
+        return body?.toString(Charsets.UTF_8).orEmpty()
     }
 
     private fun assertCompleted(events: List<ProtocolEvent>) {

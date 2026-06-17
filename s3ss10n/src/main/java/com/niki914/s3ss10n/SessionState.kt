@@ -96,12 +96,22 @@ internal class SessionState(
         }
     }
 
+    internal suspend fun cancelCurrentRoundAndRun(
+        cleanupTools: suspend () -> Unit,
+        block: suspend () -> Unit
+    ) {
+        roundMutex.withLock {
+            cancelCurrentRoundLocked(cleanupTools)
+            block()
+        }
+    }
+
     private suspend fun cancelCurrentRoundLocked(
         cleanupTools: (suspend () -> Unit)?
     ) {
         currentRoundJob?.cancel()
-        currentRoundJob?.join()
         cleanupTools?.invoke()
+        currentRoundJob?.join()
         currentRoundJob = null
         currentStopHook = null
     }

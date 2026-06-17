@@ -20,6 +20,11 @@ internal class HistoryKeeper {
         history.clear()
     }
 
+    suspend fun replace(turns: List<ChatTurn>) = mutex.withLock {
+        history.clear()
+        history += turns
+    }
+
     suspend fun dropLast(count: Int) = mutex.withLock {
         repeat(count.coerceAtMost(history.size)) {
             history.removeAt(history.lastIndex)

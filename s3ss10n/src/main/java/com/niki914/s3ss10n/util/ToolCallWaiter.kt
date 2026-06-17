@@ -40,8 +40,10 @@ internal class ToolCallWaiter<CTX>(
         return try {
             calls.awaitAll()
         } finally {
-            mutex.withLock {
-                currCalls.removeAll(calls.toSet())
+            if (calls.all { it.isCompleted }) {
+                mutex.withLock {
+                    currCalls.removeAll(calls.toSet())
+                }
             }
         }
     }

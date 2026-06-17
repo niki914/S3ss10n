@@ -11,8 +11,8 @@ android {
         applicationId = "com.niki914.demo"
         minSdk = 26
         targetSdk = 34
-        versionName = "2.1.2"
-        versionCode = 2
+        versionName = "2.1.3"
+        versionCode = 3
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         ndk {
@@ -54,7 +54,7 @@ android {
 dependencies {
     implementation(project(":composebase"))
     implementation(project(":s3ss10n"))
-//    implementation("com.github.niki914:s3ss10n:2.1.2")
+//    implementation("com.github.niki914:s3ss10n:2.1.3")
 
     // Radius
     implementation("com.github.Kyant0:Capsule:2.1.0")

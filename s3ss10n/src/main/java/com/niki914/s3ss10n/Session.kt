@@ -20,6 +20,8 @@ interface Session {
 
     suspend fun getHistory(): List<ChatTurn>
 
+    suspend fun replaceHistory(history: List<ChatTurn>): Unit
+
     suspend fun resetConversation()
 
     suspend fun close()

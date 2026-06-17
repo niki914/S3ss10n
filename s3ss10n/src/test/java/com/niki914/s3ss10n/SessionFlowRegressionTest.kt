@@ -1364,6 +1364,203 @@ class SessionFlowRegressionTest {
     }
 
     @Test
+    fun `replaceHistory 恢复普通历史后下一轮请求携带 replaced history`() = runBlocking {
+        val protocol = RecordingChatProtocol {
+            flowOf(ProtocolEvent.TextDelta("next"), ProtocolEvent.Completed)
+        }
+        val session = newChatSession(protocol = protocol, engine = FakeHttpEngine())
+        val restored = listOf(
+            ChatTurn.User(content = "hi"),
+            ChatTurn.Assistant(content = "hello")
+        )
+
+        try {
+            session.replaceHistory(restored)
+            val events = session.send("continue").toList()
+
+            assertEquals(restored, protocol.lastHistory)
+            assertEquals("continue", protocol.lastPendingUserInput)
+            assertEquals(SessionEvent.RoundCompleted(fullText = "next"), events.last())
+            assertEquals(
+                restored + ChatTurn.User(content = "continue") + ChatTurn.Assistant(content = "next"),
+                session.getHistory()
+            )
+        } finally {
+            session.close()
+        }
+    }
+
+    @Test
+    fun `replaceHistory 过滤 System 且覆盖不追加`() = runBlocking {
+        val protocol = RecordingChatProtocol {
+            flowOf(ProtocolEvent.TextDelta("done"), ProtocolEvent.Completed)
+        }
+        val session = newChatSession(protocol = protocol, engine = FakeHttpEngine())
+        val restored = listOf(
+            ChatTurn.System(content = "old system"),
+            ChatTurn.User(content = "restored")
+        )
+
+        try {
+            session.send("old").toList()
+            assertTrue(session.getHistory().isNotEmpty())
+
+            session.replaceHistory(restored)
+
+            assertEquals(listOf(ChatTurn.User(content = "restored")), session.getHistory())
+            session.send("next").toList()
+            assertEquals(listOf(ChatTurn.User(content = "restored")), protocol.lastHistory)
+        } finally {
+            session.close()
+        }
+    }
+
+    @Test
+    fun `replaceHistory 后更新 systemPrompt 使用最新配置`() = runBlocking {
+        val protocol = RecordingChatProtocol {
+            flowOf(ProtocolEvent.TextDelta("answer"), ProtocolEvent.Completed)
+        }
+        val session = newChatSession(protocol = protocol, engine = FakeHttpEngine()) {
+            systemPrompt = "initial"
+        }
+
+        try {
+            session.replaceHistory(
+                listOf(
+                    ChatTurn.System(content = "restored system"),
+                    ChatTurn.User(content = "hi")
+                )
+            )
+            session.update {
+                systemPrompt = "new"
+            }
+            session.send("next").toList()
+
+            assertEquals("new", protocol.lastSnapshot?.systemPrompt)
+            assertEquals(listOf(ChatTurn.User(content = "hi")), protocol.lastHistory)
+        } finally {
+            session.close()
+        }
+    }
+
+    @Test
+    fun `replaceHistory 运行中取消当前 round 并清理等待中的工具调用`() = runBlocking {
+        val hookStarted = CompletableDeferred<Unit>()
+        val hookRelease = CompletableDeferred<Unit>()
+        val hookCancelled = CompletableDeferred<Unit>()
+        val protocol = hangingToolThenTextProtocol()
+        val session = newChatSession(protocol = protocol, engine = FakeHttpEngine()) {
+            registerLookupTool()
+            hooks {
+                try {
+                    hookStarted.complete(Unit)
+                    hookRelease.await()
+                    ok("""{"answer":"late"}""")
+                } finally {
+                    hookCancelled.complete(Unit)
+                }
+            }
+        }
+        val restored = listOf(ChatTurn.User(content = "restored"))
+
+        try {
+            val first = async { session.send("first").toList() }
+            hookStarted.await()
+
+            session.replaceHistory(restored)
+            assertEquals(restored, session.getHistory())
+            assertTrue(hookCancelled.isCompleted)
+
+            val secondEvents = session.send("second").toList()
+            assertEquals(restored, protocol.lastHistory)
+            assertEquals("second", protocol.lastPendingUserInput)
+            assertFalse(protocol.lastHistory.any { turn ->
+                turn is ChatTurn.ToolResult && turn.callId == "call-1"
+            })
+            assertEquals(SessionEvent.RoundCompleted(fullText = "done"), secondEvents.last())
+            try {
+                first.await()
+                fail("first send should be cancelled by replaceHistory")
+            } catch (_: CancellationException) {
+                // replaceHistory 会取消当前 round，并清理等待中的工具调用。
+            }
+            Unit
+        } finally {
+            hookRelease.complete(Unit)
+            session.close()
+        }
+    }
+
+    @Test
+    fun `replaceHistory 保留 assistant tool calls 和 tool result history`() = runBlocking {
+        val protocol = RecordingChatProtocol {
+            flowOf(ProtocolEvent.TextDelta("done"), ProtocolEvent.Completed)
+        }
+        val session = newChatSession(protocol = protocol, engine = FakeHttpEngine())
+        val restored = listOf(
+            ChatTurn.User(content = "use tool"),
+            ChatTurn.Assistant(
+                content = "",
+                toolCalls = listOf(
+                    ToolCallSpec(
+                        callId = "call-1",
+                        toolName = "lookup",
+                        argumentsJson = """{"query":"hi"}"""
+                    )
+                )
+            ),
+            ChatTurn.ToolResult(
+                callId = "call-1",
+                toolName = "lookup",
+                resultJson = """{"ok":true}"""
+            )
+        )
+
+        try {
+            session.replaceHistory(restored)
+            session.send("next").toList()
+
+            assertEquals(restored, protocol.lastHistory)
+            val assistant = protocol.lastHistory.filterIsInstance<ChatTurn.Assistant>().single()
+            val toolResult = protocol.lastHistory.filterIsInstance<ChatTurn.ToolResult>().single()
+            assertEquals("call-1", assistant.toolCalls.single().callId)
+            assertEquals("lookup", assistant.toolCalls.single().toolName)
+            assertEquals("""{"query":"hi"}""", assistant.toolCalls.single().argumentsJson)
+            assertEquals("call-1", toolResult.callId)
+            assertEquals("lookup", toolResult.toolName)
+            assertEquals("""{"ok":true}""", toolResult.resultJson)
+        } finally {
+            session.close()
+        }
+    }
+
+    @Test
+    fun `replaceHistory getHistory 对称恢复`() = runBlocking {
+        val firstProtocol = RecordingChatProtocol {
+            flowOf(ProtocolEvent.TextDelta("hello"), ProtocolEvent.Completed)
+        }
+        val firstSession = newChatSession(protocol = firstProtocol, engine = FakeHttpEngine())
+        val secondProtocol = RecordingChatProtocol {
+            flowOf(ProtocolEvent.TextDelta("continued"), ProtocolEvent.Completed)
+        }
+        val secondSession = newChatSession(protocol = secondProtocol, engine = FakeHttpEngine())
+
+        try {
+            firstSession.send("hi").toList()
+            val restored = firstSession.getHistory()
+
+            secondSession.replaceHistory(restored)
+            secondSession.send("next").toList()
+
+            assertEquals(restored, secondProtocol.lastHistory)
+            assertEquals(restored, secondSession.getHistory().take(restored.size))
+        } finally {
+            firstSession.close()
+            secondSession.close()
+        }
+    }
+
+    @Test
     fun `连续 send 取消前一轮且不留下孤儿 tool call`() = runBlocking {
         val hookStarted = CompletableDeferred<Unit>()
         val hookRelease = CompletableDeferred<Unit>()
