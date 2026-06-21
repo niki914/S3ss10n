@@ -105,7 +105,11 @@ internal class RoundRunner(
         ctx.activeStopRequest = request
         ctx.collectorJob?.cancel(RoundStopException(request))
         toolCallWaiter.cancelAndClear(join = true)
-        rollbackCurrentTurn(ctx)
+        if (keepCurrentTurn) {
+            rollbackOpenSegmentToCheckpoint(ctx)
+        } else {
+            rollbackCurrentTurn(ctx)
+        }
         commitPartialTurnForStopIfNeeded(ctx, keepCurrentTurn)
         finishRound(ctx, request.reason)
     }
@@ -131,6 +135,8 @@ internal class RoundRunner(
                 finishRound(ctx, SessionEvent.FinishReason.Error)
             }
         }) {
+            openSegment(ctx)
+            throwIfStopRequested(ctx)
             ensureConfigValid(ctx.snapshot)
 
             val fullText = StringBuilder()
@@ -154,11 +160,13 @@ internal class RoundRunner(
                 .mapNotNull { it.payloadOrNull() }
                 .takeWhile { it != "[DONE]" }
             protocol.parseStream(payloadFlow).collect { event ->
+                throwIfStopRequested(ctx)
                 startRoundIfNeeded(ctx)
                 when (event) {
                     is ProtocolEvent.TextDelta -> {
                         fullText.append(event.text)
                         ctx.textAccumulator.append(event.text)
+                        ctx.openSegmentTextAccumulator.append(event.text)
                         emitRoundEvent(
                             ctx,
                             SessionEvent.TextDelta(
@@ -182,6 +190,7 @@ internal class RoundRunner(
                             toolName = event.toolName,
                             argumentsJson = event.argumentsJson
                         )
+                        ctx.openSegmentHasToolCalls = true
                         toolCalls += toolCall
                         toolCallWaiter.enqueue(toolCall, ctx)
                     }
@@ -200,6 +209,7 @@ internal class RoundRunner(
                     ProtocolEvent.Completed -> Unit
                 }
             }
+            throwIfStopRequested(ctx)
 
             val committed = commitRoundTurnsIfValid(
                 ctx = ctx,
@@ -213,6 +223,7 @@ internal class RoundRunner(
                 finishRound(ctx, SessionEvent.FinishReason.Error)
                 return@xTrySuspend
             }
+            throwIfStopRequested(ctx)
 
             if (!toolCallWaiter.isEmpty()) {
                 responseToolCalls(ctx)
@@ -290,31 +301,45 @@ internal class RoundRunner(
         ctx: RoundContext,
         keepCurrentTurn: Boolean
     ) {
-        if (
-            !keepCurrentTurn ||
-            ctx.textAccumulator.isBlank() ||
-            ctx.hasCompleted ||
-            ctx.stopPartialCommitted
-        ) return
-        if (!ctx.committedInitialUser) {
-            historyKeeper.add(ChatTurn.User(ctx.initialInput))
-            ctx.committedInitialUser = true
-            ctx.committedTurnCount += 1
-        }
-        historyKeeper.add(
-            ChatTurn.Assistant(
-                content = ctx.textAccumulator.toString()
+        ctx.historyMutex.withLock {
+            if (
+                !keepCurrentTurn ||
+                ctx.openSegmentTextAccumulator.isBlank() ||
+                ctx.hasCompleted ||
+                ctx.stopPartialCommitted
+            ) return
+            if (!ctx.committedInitialUser) {
+                historyKeeper.add(ChatTurn.User(ctx.initialInput))
+                ctx.committedInitialUser = true
+                ctx.committedTurnCount += 1
+            }
+            historyKeeper.add(
+                ChatTurn.Assistant(
+                    content = ctx.openSegmentTextAccumulator.toString()
+                )
             )
-        )
-        ctx.committedTurnCount += 1
-        ctx.stopPartialCommitted = true
+            ctx.committedTurnCount += 1
+            ctx.stopPartialCommitted = true
+        }
+    }
+
+    private suspend fun rollbackOpenSegmentToCheckpoint(ctx: RoundContext) {
+        ctx.historyMutex.withLock {
+            val dropCount = ctx.committedTurnCount - ctx.safeCheckpointTurnCount
+            if (dropCount <= 0) return
+            historyKeeper.dropLast(dropCount)
+            ctx.committedTurnCount = ctx.safeCheckpointTurnCount
+            ctx.committedInitialUser = ctx.safeCheckpointCommittedInitialUser
+        }
     }
 
     private suspend fun rollbackCurrentTurn(ctx: RoundContext) {
-        if (ctx.committedTurnCount <= 0) return
-        historyKeeper.dropLast(ctx.committedTurnCount)
-        ctx.committedTurnCount = 0
-        ctx.committedInitialUser = false
+        ctx.historyMutex.withLock {
+            if (ctx.committedTurnCount <= 0) return
+            historyKeeper.dropLast(ctx.committedTurnCount)
+            ctx.committedTurnCount = 0
+            ctx.committedInitialUser = false
+        }
     }
 
     private suspend fun emitRoundError(
@@ -383,35 +408,49 @@ internal class RoundRunner(
             return false
         }
 
-        if (userInput != null) {
-            historyKeeper.add(ChatTurn.User(userInput))
-            ctx.committedInitialUser = true
-            ctx.committedTurnCount += 1
-        }
-        historyKeeper.add(
-            ChatTurn.Assistant(
-                content = assistantContent,
-                toolCalls = toolCalls,
-                reasoningContent = reasoningContent,
-                reasoningSignature = reasoningSignature
+        ctx.historyMutex.withLock {
+            if (userInput != null) {
+                historyKeeper.add(ChatTurn.User(userInput))
+                ctx.committedInitialUser = true
+                ctx.committedTurnCount += 1
+            }
+            historyKeeper.add(
+                ChatTurn.Assistant(
+                    content = assistantContent,
+                    toolCalls = toolCalls,
+                    reasoningContent = reasoningContent,
+                    reasoningSignature = reasoningSignature
+                )
             )
-        )
-        ctx.committedTurnCount += 1
+            ctx.committedTurnCount += 1
+            if (toolCalls.isEmpty()) {
+                markSafeCheckpoint(ctx)
+                closeSegment(ctx)
+            }
+        }
         return true
     }
 
     private suspend fun responseToolCalls(ctx: RoundContext) {
+        throwIfStopRequested(ctx)
         val results = toolCallWaiter.awaitAll()
-        results.forEach { (toolCall, msg) ->
-            historyKeeper.add(
-                protocol.encodeToolResult(
-                    callId = toolCall.callId,
-                    toolName = toolCall.toolName,
-                    resultJson = msg.contentJson
+        throwIfStopRequested(ctx)
+        ctx.historyMutex.withLock {
+            throwIfStopRequested(ctx)
+            results.forEach { (toolCall, msg) ->
+                historyKeeper.add(
+                    protocol.encodeToolResult(
+                        callId = toolCall.callId,
+                        toolName = toolCall.toolName,
+                        resultJson = msg.contentJson
+                    )
                 )
-            )
-            ctx.committedTurnCount += 1
+                ctx.committedTurnCount += 1
+            }
+            markSafeCheckpoint(ctx)
+            closeSegment(ctx)
         }
+        throwIfStopRequested(ctx)
         doRound(ctx, null)
     }
 
@@ -455,6 +494,26 @@ internal class RoundRunner(
             else -> SessionEvent.Stage.Transport
         }
     }
+
+    private fun openSegment(ctx: RoundContext) {
+        ctx.openSegmentTextAccumulator.clear()
+        ctx.openSegmentHasToolCalls = false
+    }
+
+    private fun closeSegment(ctx: RoundContext) {
+        ctx.openSegmentTextAccumulator.clear()
+        ctx.openSegmentHasToolCalls = false
+    }
+
+    private fun markSafeCheckpoint(ctx: RoundContext) {
+        ctx.safeCheckpointTurnCount = ctx.committedTurnCount
+        ctx.safeCheckpointCommittedInitialUser = ctx.committedInitialUser
+    }
+
+    private fun throwIfStopRequested(ctx: RoundContext) {
+        val request = ctx.activeStopRequest ?: return
+        throw RoundStopException(request)
+    }
 }
 
 private fun HttpFrame.payloadOrNull(): String? = when (this) {
@@ -468,16 +527,21 @@ private class RoundContext(
     val initialInput: String,
     val roundToken: Any,
     val textAccumulator: StringBuilder = StringBuilder(),
+    val openSegmentTextAccumulator: StringBuilder = StringBuilder(),
     var hasStarted: Boolean = false,
     var hasCompleted: Boolean = false,
     var hasError: Boolean = false,
     var committedInitialUser: Boolean = false,
     var committedTurnCount: Int = 0,
+    var safeCheckpointTurnCount: Int = 0,
+    var safeCheckpointCommittedInitialUser: Boolean = false,
     var stopPartialCommitted: Boolean = false,
+    var openSegmentHasToolCalls: Boolean = false,
     var activeStopRequest: StopRequest? = null,
     var terminalFailure: Throwable? = null,
     var idleWatcher: Job? = null,
     var collectorJob: Job? = null,
+    val historyMutex: Mutex = Mutex(),
     val eventMutex: Mutex = Mutex()
 )
 

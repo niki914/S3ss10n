@@ -367,6 +367,66 @@ class SessionFlowRegressionTest {
     }
 
     @Test
+    fun `stop false 在前段已闭合后仍整轮回滚 history`() = runBlocking {
+        val tailTextSeen = CompletableDeferred<Unit>()
+        val neverRelease = CompletableDeferred<Unit>()
+        val events = mutableListOf<SessionEvent>()
+        var parseCount = 0
+        val protocol = RecordingChatProtocol {
+            when (parseCount++) {
+                0 -> flowOf(
+                    ProtocolEvent.TextDelta("prefix"),
+                    ProtocolEvent.ToolCallReady(
+                        callId = "call-1",
+                        toolName = "lookup",
+                        argumentsJson = """{"query":"first"}"""
+                    ),
+                    ProtocolEvent.Completed
+                )
+
+                else -> flow {
+                    emit(ProtocolEvent.TextDelta("suffix"))
+                    tailTextSeen.complete(Unit)
+                    neverRelease.await()
+                    emit(ProtocolEvent.Completed)
+                }
+            }
+        }
+        val session = newChatSession(protocol = protocol, engine = FakeHttpEngine()) {
+            registerLookupTool()
+            hooks {
+                ok("""{"answer":"ok"}""")
+            }
+        }
+
+        try {
+            withTimeout(3_000) {
+                val sendJob = async {
+                    session.send("hi") { event ->
+                        events += event
+                    }
+                }
+                tailTextSeen.await()
+
+                session.stop(keepCurrentTurn = false)
+                sendJob.await()
+            }
+
+            assertEquals(
+                SessionEvent.RoundCompleted(
+                    fullText = "prefixsuffix",
+                    finishReason = SessionEvent.FinishReason.Stopped
+                ),
+                events.last()
+            )
+            assertEquals(emptyList<ChatTurn>(), session.getHistory())
+        } finally {
+            neverRelease.complete(Unit)
+            session.close()
+        }
+    }
+
+    @Test
     fun `首事件前 stop 会收口且不挂起`() = runBlocking {
         val streamStarted = CompletableDeferred<Unit>()
         val neverRelease = CompletableDeferred<Unit>()
@@ -527,6 +587,186 @@ class SessionFlowRegressionTest {
                 ),
                 session.getHistory()
             )
+        } finally {
+            neverRelease.complete(Unit)
+            session.close()
+        }
+    }
+
+    @Test
+    fun `stop true 保留已闭合 tool 链路和安全尾文本 但裁掉尾部未闭合 tool call`() = runBlocking {
+        val secondToolStarted = CompletableDeferred<Unit>()
+        val secondToolRelease = CompletableDeferred<Unit>()
+        val events = mutableListOf<SessionEvent>()
+        var parseCount = 0
+        val protocol = RecordingChatProtocol {
+            when (parseCount++) {
+                0 -> flowOf(
+                    ProtocolEvent.ToolCallReady(
+                        callId = "call-1",
+                        toolName = "lookup",
+                        argumentsJson = """{"query":"first"}"""
+                    ),
+                    ProtocolEvent.Completed
+                )
+
+                else -> flowOf(
+                    ProtocolEvent.TextDelta("tail"),
+                    ProtocolEvent.ToolCallReady(
+                        callId = "call-2",
+                        toolName = "lookup",
+                        argumentsJson = """{"query":"second"}"""
+                    ),
+                    ProtocolEvent.Completed
+                )
+            }
+        }
+        lateinit var session: ChatSession
+        session = newChatSession(protocol = protocol, engine = FakeHttpEngine()) {
+            registerLookupTool()
+            hooks {
+                when (id) {
+                    "call-1" -> ok("""{"answer":"ok-1"}""")
+                    "call-2" -> {
+                        secondToolStarted.complete(Unit)
+                        secondToolRelease.await()
+                        ok("""{"answer":"late"}""")
+                    }
+                    else -> error("unexpected tool call: $id")
+                }
+            }
+        }
+
+        try {
+            withTimeout(3_000) {
+                val sendJob = async {
+                    session.send("hi") { event ->
+                        events += event
+                    }
+                }
+                secondToolStarted.await()
+
+                session.stop(keepCurrentTurn = true)
+                sendJob.await()
+            }
+
+            assertEquals(
+                SessionEvent.RoundCompleted(
+                    fullText = "tail",
+                    finishReason = SessionEvent.FinishReason.Stopped
+                ),
+                events.last()
+            )
+            assertEquals(
+                listOf(
+                    ChatTurn.User(content = "hi"),
+                    ChatTurn.Assistant(
+                        content = "",
+                        toolCalls = listOf(
+                            ToolCallSpec(
+                                callId = "call-1",
+                                toolName = "lookup",
+                                argumentsJson = """{"query":"first"}"""
+                            )
+                        )
+                    ),
+                    ChatTurn.ToolResult(
+                        callId = "call-1",
+                        toolName = "lookup",
+                        resultJson = """{"answer":"ok-1"}"""
+                    ),
+                    ChatTurn.Assistant(content = "tail")
+                ),
+                session.getHistory()
+            )
+            val partialAssistant = session.getHistory().last() as ChatTurn.Assistant
+            assertTrue(partialAssistant.toolCalls.isEmpty())
+        } finally {
+            secondToolRelease.complete(Unit)
+            session.close()
+        }
+    }
+
+    @Test
+    fun `stop true 在多段 assistant 后不重复前文文本`() = runBlocking {
+        val tailTextSeen = CompletableDeferred<Unit>()
+        val neverRelease = CompletableDeferred<Unit>()
+        val events = mutableListOf<SessionEvent>()
+        var parseCount = 0
+        val protocol = RecordingChatProtocol {
+            when (parseCount++) {
+                0 -> flowOf(
+                    ProtocolEvent.TextDelta("prefix"),
+                    ProtocolEvent.ToolCallReady(
+                        callId = "call-1",
+                        toolName = "lookup",
+                        argumentsJson = """{"query":"first"}"""
+                    ),
+                    ProtocolEvent.Completed
+                )
+
+                else -> flow {
+                    emit(ProtocolEvent.TextDelta("suffix"))
+                    tailTextSeen.complete(Unit)
+                    neverRelease.await()
+                    emit(ProtocolEvent.Completed)
+                }
+            }
+        }
+        val session = newChatSession(protocol = protocol, engine = FakeHttpEngine()) {
+            registerLookupTool()
+            hooks {
+                ok("""{"answer":"ok"}""")
+            }
+        }
+
+        try {
+            withTimeout(3_000) {
+                val sendJob = async {
+                    session.send("hi") { event ->
+                        events += event
+                    }
+                }
+                tailTextSeen.await()
+
+                session.stop(keepCurrentTurn = true)
+                sendJob.await()
+            }
+
+            val history = session.getHistory()
+            val partialAssistant = history.last() as ChatTurn.Assistant
+
+            assertEquals(
+                SessionEvent.RoundCompleted(
+                    fullText = "prefixsuffix",
+                    finishReason = SessionEvent.FinishReason.Stopped
+                ),
+                events.last()
+            )
+            assertEquals(
+                listOf(
+                    ChatTurn.User(content = "hi"),
+                    ChatTurn.Assistant(
+                        content = "prefix",
+                        toolCalls = listOf(
+                            ToolCallSpec(
+                                callId = "call-1",
+                                toolName = "lookup",
+                                argumentsJson = """{"query":"first"}"""
+                            )
+                        )
+                    ),
+                    ChatTurn.ToolResult(
+                        callId = "call-1",
+                        toolName = "lookup",
+                        resultJson = """{"answer":"ok"}"""
+                    ),
+                    ChatTurn.Assistant(content = "suffix")
+                ),
+                history
+            )
+            assertEquals("suffix", partialAssistant.content)
+            assertFalse(partialAssistant.content.contains("prefix"))
         } finally {
             neverRelease.complete(Unit)
             session.close()
